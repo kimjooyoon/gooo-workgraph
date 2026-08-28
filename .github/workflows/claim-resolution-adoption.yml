@@ -162,7 +162,7 @@ jobs:
 
           jq '.summary.gooo_lines=9' "$RUNNER_TEMP/workgraph/complete.json" > "$RUNNER_TEMP/laundered-complete.json"
           bash "$evaluator" "${common[@]}" "$RUNNER_TEMP/laundered-complete.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/laundered-inventory.json" "$SUBJECT_SHA" laundered-inventory
-          jq -e '.decision=="FAIL_CLOSED" and .summary.closed==10 and .summary.refuted==2 and
+          jq -e '.decision=="FAIL_CLOSED" and .summary.closed==9 and .summary.refuted==3 and
             .claim.stage=="WORKGRAPH_CLAIM" and .claim.reason=="RELEASED_WORKSPACE_CLOSED_CLAIM_OR_FACT_MISMATCH"' "$RUNNER_TEMP/laundered-inventory.json" >/dev/null
 
           jq '.authority.cross_project_required_gates=1' "$RUNNER_TEMP/runtime.json" > "$RUNNER_TEMP/escalated-runtime.json"
