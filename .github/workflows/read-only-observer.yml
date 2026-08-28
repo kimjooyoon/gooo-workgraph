@@ -43,7 +43,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          lock="$GITHUB_WORKSPACE/contracts/core-release-lock-v1.json"
+          lock="$GITHUB_WORKSPACE/contracts/core-release-lock-v2.json"
           repository="$(jq -r .repository "$lock")"
           tag="$(jq -r .tag "$lock")"
           if gh api "repos/$repository/releases/tags/$tag" > "$RUNNER_TEMP/release-raw.json" 2> "$RUNNER_TEMP/release-error.txt"; then
@@ -78,7 +78,7 @@ jobs:
         if: steps.core_release.outputs.available == 'true'
         run: |
           set -euo pipefail
-          lock="$GITHUB_WORKSPACE/contracts/core-release-lock-v1.json"
+          lock="$GITHUB_WORKSPACE/contracts/core-release-lock-v2.json"
           release="$RUNNER_TEMP/core-release.json"
           destination="$RUNNER_TEMP/released-gooo"
           extract="$RUNNER_TEMP/released-gooo-extract"
@@ -104,7 +104,9 @@ jobs:
           after="$RUNNER_TEMP/repository-after.bin"
           git status --porcelain=v1 -z --untracked-files=all > "$before"
           "$extract/gooo" version --json > "$RUNNER_TEMP/version.json"
-          "$extract/gooo" check --json examples/read-only-observer/main.gooo > "$RUNNER_TEMP/check.json"
+          "$extract/gooo" check --json examples/read-only-observer/main.gooo > "$RUNNER_TEMP/syntax-check.json"
+          "$extract/gooo" check --semantic --json examples/read-only-observer/main.gooo > "$RUNNER_TEMP/semantic-check.json"
+          "$extract/gooo" graph dump examples/read-only-observer/main.gooo > "$RUNNER_TEMP/graph.json"
           git status --porcelain=v1 -z --untracked-files=all > "$after"
           if cmp -s "$before" "$after"; then repository_writes=0; else repository_writes=1; fi
 
@@ -122,11 +124,13 @@ jobs:
             --arg after_digest "$after_digest" \
             --argjson writes "$repository_writes" \
             --slurpfile version "$RUNNER_TEMP/version.json" \
-            --slurpfile check "$RUNNER_TEMP/check.json" \
-            '{schema:"gooo/released-cli-observation/v1",available:true,subject_sha:$head,
+            --slurpfile syntax_check "$RUNNER_TEMP/syntax-check.json" \
+            --slurpfile semantic_check "$RUNNER_TEMP/semantic-check.json" \
+            --slurpfile graph "$RUNNER_TEMP/graph.json" \
+            '{schema:"gooo/released-cli-observation/v2",available:true,subject_sha:$head,
               binary:{asset_name:$asset,digest:$digest,api_digest:$api_digest,
                 checksum_digest:$checksum_digest,checksum_verified:($digest==$checksum_digest)},
-              version:$version[0],check:$check[0],
+              version:$version[0],syntax_check:$syntax_check[0],semantic_check:$semantic_check[0],graph:$graph[0],
               source:{path:"examples/read-only-observer/main.gooo",digest:$source_digest},
               repository:{before_digest:$before_digest,after_digest:$after_digest,writes:$writes}}' \
             > "$RUNNER_TEMP/runtime.json"
@@ -135,8 +139,9 @@ jobs:
         if: steps.core_release.outputs.available != 'true'
         run: |
           jq -n --arg head "$SUBJECT_SHA" \
-            '{schema:"gooo/released-cli-observation/v1",available:false,subject_sha:$head,
-              reason:"PINNED_CORE_RELEASE_NOT_AVAILABLE",binary:null,version:null,check:null,source:null,
+            '{schema:"gooo/released-cli-observation/v2",available:false,subject_sha:$head,
+              reason:"PINNED_CORE_RELEASE_NOT_AVAILABLE",binary:null,version:null,syntax_check:null,
+              semantic_check:null,graph:null,source:null,
               repository:{before_digest:null,after_digest:null,writes:null}}' > "$RUNNER_TEMP/runtime.json"
 
       - name: Evaluate initial unknown and close it through a predecessor
@@ -157,7 +162,9 @@ jobs:
             .summary.repository_writes == 0 and .claim.status == "DISCHARGED" and .claim.state == "CLOSED" and
             .predecessor.report_digest != null and .predecessor.claim.stage == "EVALUATOR" and
             ([.proofs[]|select(.closed==.total)]|length) == 3 and
-            (.indicators[]|select(.id=="gooo.metric.workgraph.repository-writes.v2")|.state=="SATISFIED")' \
+            (.indicators[]|select(.id=="gooo.metric.workgraph.released-cli-receipts.v3")|.value==4 and .total==4 and .state=="SATISFIED") and
+            (.indicators[]|select(.id=="gooo.metric.workgraph.meta-binding.v3")|.value==12 and .total==12 and .state=="SATISFIED") and
+            (.indicators[]|select(.id=="gooo.metric.workgraph.repository-writes.v3")|.state=="SATISFIED")' \
             "$RUNNER_TEMP/report.json" >/dev/null
 
       - name: Refute repository and release contradictions
@@ -174,18 +181,47 @@ jobs:
             .summary.refuted_tasks == 1 and .claim.stage == "RELEASE" and .claim.step == "LOCK_CORE_RELEASE_ASSET_SET"' \
             "$RUNNER_TEMP/release-refuted.json" >/dev/null
 
+          jq '(.graph.nodes) |= map(select(.name != "PreserveUnknownTrace"))' \
+            "$RUNNER_TEMP/runtime.json" > "$RUNNER_TEMP/missing-activity-runtime.json"
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/missing-activity-runtime.json" "$RUNNER_TEMP/initial.json" "$RUNNER_TEMP/graph-refuted.json" "$SUBJECT_SHA"
+          jq -e '.decision == "FAIL_CLOSED" and .resolution == "EXACT" and .reason == "RELEASED_SEMANTIC_RECEIPTS_MISMATCH" and
+            .summary.refuted_tasks == 1 and .claim.stage == "COMPILER" and .claim.step == "OBSERVE_RELEASED_SEMANTIC_RECEIPTS" and
+            (.indicators[]|select(.id=="gooo.metric.workgraph.meta-binding.v3")|.value==11 and .total==12 and .state=="GAP")' \
+            "$RUNNER_TEMP/graph-refuted.json" >/dev/null
+
+      - name: Publish exact human-readable indicators
+        run: |
+          {
+            echo '## Workgraph released semantic evidence'
+            echo
+            jq -r '"- readiness: \(.summary.closed_tasks)/\(.summary.total_tasks) CLOSED; UNKNOWN \(.summary.unknown_tasks); REFUTED \(.summary.refuted_tasks)",
+              (.indicators[] | "- \(.id): \(.value)/\(.total) [\(.state)]"),
+              "- graph source digest: \(.released_cli.graph_source_digest)",
+              "- semantic IR digest: \(.released_cli.semantic_ir_digest)",
+              "- graph hash: \(.released_cli.graph_hash)",
+              "- repository writes: \(.summary.repository_writes)",
+              "- deterministic replay: true",
+              "- local test executions: 0"' "$RUNNER_TEMP/report.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Enforce read-only repository effect
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - uses: actions/upload-artifact@v6
+        if: always()
         with:
           name: released-cli-readiness-${{ env.SUBJECT_SHA }}
           path: |
             ${{ runner.temp }}/repository.json
             ${{ runner.temp }}/core-release.json
             ${{ runner.temp }}/runtime.json
+            ${{ runner.temp }}/version.json
+            ${{ runner.temp }}/syntax-check.json
+            ${{ runner.temp }}/semantic-check.json
+            ${{ runner.temp }}/graph.json
             ${{ runner.temp }}/initial.json
             ${{ runner.temp }}/report.json
             ${{ runner.temp }}/replay.json
             ${{ runner.temp }}/private-refuted.json
             ${{ runner.temp }}/release-refuted.json
+            ${{ runner.temp }}/graph-refuted.json

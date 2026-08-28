@@ -22,6 +22,19 @@ The v2 readiness contract consumes the public v0.1.0-dev prerelease:
   and emits 12/12 CLOSED, 0 UNKNOWN, 0 REFUTED;
 - it keeps all generated evidence outside the input repository.
 
+The v3 contract preserves the same twelve-task denominator while increasing
+the compiler observation resolution:
+
+- released receipts are counted separately as version, syntax check, explicit
+  semantic check, and semantic graph (`4/4`);
+- default `check --json` remains syntax-only and is never promoted into
+  semantic evidence;
+- the released graph must contain exactly the twelve activities declared by
+  the denominator and must carry the checked source digest;
+- meta binding is computed from graph nodes rather than source-text matching;
+- a missing graph activity is REFUTED at
+  `COMPILER / OBSERVE_RELEASED_SEMANTIC_RECEIPTS`.
+
 A contradictory release digest or non-public repository is REFUTED, never
 silently lowered into success.
 
