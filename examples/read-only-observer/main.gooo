@@ -5,7 +5,7 @@ entity PublicRepository id "workgraph://entity/public-repository"
 entity GoooAuthority id "workgraph://entity/gooo-authority"
 entity WorkgraphContract id "workgraph://entity/contract"
 entity ContractRFC id "workgraph://entity/rfc"
-entity CoreRelease id "workgraph://entity/core-release"
+entity PinnedCoreRelease id "workgraph://entity/pinned-core-release"
 entity CoreBinaryLock id "workgraph://entity/core-binary-lock"
 entity VersionReceipt id "workgraph://entity/version-receipt"
 entity CheckReceipt id "workgraph://entity/check-receipt"
@@ -19,10 +19,10 @@ activity ObservePublicRepository(PublicRepository) -> ReadinessDecision
 activity DeclareGoooAuthority(GoooAuthority) -> ReadinessDecision
 activity VersionWorkgraphContract(WorkgraphContract) -> ReadinessDecision
 activity PublishContractRFC(ContractRFC) -> ReadinessDecision
-activity ObserveCoreRelease(CoreRelease) -> ReadinessDecision
-activity LockCoreBinaryDigest(CoreRelease) -> CoreBinaryLock
-activity ObserveVersionSchema(CoreBinaryLock) -> VersionReceipt
-activity ObserveCheckReceipt(VersionReceipt) -> CheckReceipt
+activity ObserveCoreRelease(PinnedCoreRelease) -> ReadinessDecision
+activity LockCoreBinaryDigest(PinnedCoreRelease) -> CoreBinaryLock
+activity ExecuteReleasedVersion(CoreBinaryLock) -> VersionReceipt
+activity ExecuteReleasedCheck(VersionReceipt) -> CheckReceipt
 activity BindSourceHead(CheckReceipt) -> SourceHeadBinding
 activity ObserveRepositoryWrites(SourceHeadBinding) -> RepositoryWriteObservation
 activity ObserveInitialReport(RepositoryWriteObservation) -> InitialWorkgraphReport
