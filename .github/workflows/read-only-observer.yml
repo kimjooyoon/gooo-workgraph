@@ -1,0 +1,57 @@
+name: Read-only observer readiness
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Capture public repository observation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY" | jq '{schema:"gooo/public-repository-observation/v1",full_name:.full_name,visibility:.visibility,private:.private,default_branch:.default_branch}' > "$RUNNER_TEMP/repository.json"
+      - name: Capture core release observation once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api repos/kimjooyoon/meta-ontology-go/releases/latest > "$RUNNER_TEMP/release-raw.json" 2> "$RUNNER_TEMP/release-error.txt"; then
+            jq '{schema:"gooo/core-release-observation/v1",available:true,release:{tag_name,draft,prerelease,target_commitish,assets:[.assets[]|{name,digest,size}]}}' "$RUNNER_TEMP/release-raw.json" > "$RUNNER_TEMP/core-release.json"
+          elif grep -Fq 'HTTP 404' "$RUNNER_TEMP/release-error.txt"; then
+            jq -n '{schema:"gooo/core-release-observation/v1",available:false,release:null}' > "$RUNNER_TEMP/core-release.json"
+          else
+            cat "$RUNNER_TEMP/release-error.txt" >&2
+            exit 1
+          fi
+      - name: Evaluate and replay fixed readiness evidence
+        run: |
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/report.json" "$GITHUB_SHA"
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/replay.json" "$GITHUB_SHA"
+          cmp -s "$RUNNER_TEMP/report.json" "$RUNNER_TEMP/replay.json"
+          jq -e '.summary.total_tasks == 12 and ((.summary.closed_tasks + .summary.unknown_tasks + .summary.refuted_tasks) == 12)' "$RUNNER_TEMP/report.json" >/dev/null
+          jq -e '.summary.repository_writes == null and (.indicators[] | select(.id == "gooo.metric.workgraph.repository-writes.v1") | .state == "UNKNOWN")' "$RUNNER_TEMP/report.json" >/dev/null
+          if jq -e '.available == false' "$RUNNER_TEMP/core-release.json" >/dev/null; then
+            jq -e '.decision == "PROGRESS_OBSERVED" and .resolution == "PREREQUISITE_CLASS" and .reason == "CORE_RELEASE_NOT_AVAILABLE" and .summary.closed_tasks == 4 and .summary.unknown_tasks == 8 and .summary.refuted_tasks == 0 and .claim.stage == "RELEASE" and .claim.step == "OBSERVE_CORE_RELEASE"' "$RUNNER_TEMP/report.json" >/dev/null
+          fi
+      - name: Refute a non-public repository counterexample
+        run: |
+          jq '.visibility="private" | .private=true' "$RUNNER_TEMP/repository.json" > "$RUNNER_TEMP/private-repository.json"
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/private-repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/refuted.json" "$GITHUB_SHA"
+          jq -e '.decision == "FAIL_CLOSED" and .resolution == "EXACT" and .reason == "PUBLIC_REPOSITORY_NOT_PUBLIC" and .summary.refuted_tasks == 1 and .claim.status == "CONTESTED"' "$RUNNER_TEMP/refuted.json" >/dev/null
+      - uses: actions/upload-artifact@v6
+        with:
+          name: read-only-observer-readiness-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/repository.json
+            ${{ runner.temp }}/core-release.json
+            ${{ runner.temp }}/report.json
+            ${{ runner.temp }}/replay.json
+            ${{ runner.temp }}/refuted.json
