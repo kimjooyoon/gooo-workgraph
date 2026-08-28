@@ -1,0 +1,68 @@
+{
+  "schema": "gooo/workgraph-project/v1",
+  "project": "gooo-workgraph",
+  "source": "examples/read-only-observer/main.gooo",
+  "claim": {
+    "id": "workgraph://claim/reproducible-project-observation",
+    "entity": "ProjectObservationClaim",
+    "authority": "examples/read-only-observer/main.gooo"
+  },
+  "gates": [
+    {
+      "id": "SOURCE_AUTHORITY",
+      "activity": "ObserveProject",
+      "stage": "SOURCE",
+      "step": "DECLARE_AUTHORITY",
+      "evidence_key": "source",
+      "proof_choice": "FOUNDATION"
+    },
+    {
+      "id": "SYNTAX_ACCEPTED",
+      "activity": "CheckProject",
+      "stage": "COMPILER",
+      "step": "CHECK_SOURCE",
+      "evidence_key": "syntax",
+      "proof_choice": "FOUNDATION"
+    },
+    {
+      "id": "META_BOUND",
+      "activity": "BindProjectEvidence",
+      "stage": "META",
+      "step": "BIND_ACTIVITIES",
+      "evidence_key": "binding",
+      "proof_choice": "COHERENCE"
+    },
+    {
+      "id": "DETERMINISTIC_REPLAY",
+      "activity": "ReplayProjectGeneration",
+      "stage": "GENERATOR",
+      "step": "REPLAY_GENERATION",
+      "evidence_key": "replay",
+      "proof_choice": "REGRESSION"
+    },
+    {
+      "id": "ARTIFACT_GENERATED",
+      "activity": "GenerateProjectArtifact",
+      "stage": "GENERATOR",
+      "step": "EMIT_ARTIFACT",
+      "evidence_key": "artifact",
+      "proof_choice": "COHERENCE"
+    },
+    {
+      "id": "RESOURCE_OBSERVED",
+      "activity": "ObserveProjectResources",
+      "stage": "RUNTIME",
+      "step": "SAMPLE_RESOURCES",
+      "evidence_key": "resource",
+      "proof_choice": "REGRESSION"
+    },
+    {
+      "id": "USER_ROUNDTRIP",
+      "activity": "CloseProjectClaim",
+      "stage": "USER",
+      "step": "CLOSE_CLAIM",
+      "evidence_key": "roundtrip",
+      "proof_choice": "COHERENCE"
+    }
+  ]
+}
