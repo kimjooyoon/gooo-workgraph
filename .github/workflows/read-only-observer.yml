@@ -18,46 +18,174 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ env.SUBJECT_SHA }}
+
       - name: Bind exact subject identity
         run: test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
+
+      - name: Reject core source coupling
+        run: |
+          if grep -R -n --include='*.go' 'github.com/kimjooyoon/meta-ontology-go/internal' .; then
+            echo "core internal package coupling is forbidden" >&2
+            exit 1
+          fi
+
       - name: Capture public repository observation
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY" | jq '{schema:"gooo/public-repository-observation/v1",full_name:.full_name,visibility:.visibility,private:.private,default_branch:.default_branch}' > "$RUNNER_TEMP/repository.json"
-      - name: Capture core release observation once
+          gh api "repos/$GITHUB_REPOSITORY" |
+            jq '{schema:"gooo/public-repository-observation/v1",full_name:.full_name,visibility:.visibility,private:.private,default_branch:.default_branch}' \
+            > "$RUNNER_TEMP/repository.json"
+
+      - name: Capture pinned core prerelease observation
+        id: core_release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh api repos/kimjooyoon/meta-ontology-go/releases/latest > "$RUNNER_TEMP/release-raw.json" 2> "$RUNNER_TEMP/release-error.txt"; then
-            jq '{schema:"gooo/core-release-observation/v1",available:true,release:{tag_name,draft,prerelease,target_commitish,assets:[.assets[]|{name,digest,size}]}}' "$RUNNER_TEMP/release-raw.json" > "$RUNNER_TEMP/core-release.json"
+          set -euo pipefail
+          lock="$GITHUB_WORKSPACE/contracts/core-release-lock-v1.json"
+          repository="$(jq -r .repository "$lock")"
+          tag="$(jq -r .tag "$lock")"
+          if gh api "repos/$repository/releases/tags/$tag" > "$RUNNER_TEMP/release-raw.json" 2> "$RUNNER_TEMP/release-error.txt"; then
+            gh api "repos/$repository/git/ref/tags/$tag" > "$RUNNER_TEMP/tag-ref.json"
+            tag_object="$(jq -r .object.sha "$RUNNER_TEMP/tag-ref.json")"
+            if jq -e '.object.type == "tag"' "$RUNNER_TEMP/tag-ref.json" >/dev/null; then
+              gh api "repos/$repository/git/tags/$tag_object" > "$RUNNER_TEMP/annotated-tag.json"
+            else
+              jq -n --arg sha "$tag_object" '{object:{type:"commit",sha:$sha}}' > "$RUNNER_TEMP/annotated-tag.json"
+            fi
+            jq -n \
+              --slurpfile release "$RUNNER_TEMP/release-raw.json" \
+              --slurpfile ref "$RUNNER_TEMP/tag-ref.json" \
+              --slurpfile annotated "$RUNNER_TEMP/annotated-tag.json" \
+              '{schema:"gooo/core-release-observation/v2",available:true,
+                release:{id:$release[0].id,tag_name:$release[0].tag_name,draft:$release[0].draft,
+                  prerelease:$release[0].prerelease,target_commitish:$release[0].target_commitish,
+                  tag_object_type:$ref[0].object.type,tag_object_sha:$ref[0].object.sha,
+                  target_sha:$annotated[0].object.sha,
+                  assets:[$release[0].assets[]|{id,name,digest,size,browser_download_url}]}}' \
+              > "$RUNNER_TEMP/core-release.json"
+            echo "available=true" >> "$GITHUB_OUTPUT"
           elif grep -Fq 'HTTP 404' "$RUNNER_TEMP/release-error.txt"; then
-            jq -n '{schema:"gooo/core-release-observation/v1",available:false,release:null}' > "$RUNNER_TEMP/core-release.json"
+            jq -n '{schema:"gooo/core-release-observation/v2",available:false,release:null}' > "$RUNNER_TEMP/core-release.json"
+            echo "available=false" >> "$GITHUB_OUTPUT"
           else
             cat "$RUNNER_TEMP/release-error.txt" >&2
             exit 1
           fi
-      - name: Evaluate and replay fixed readiness evidence
+
+      - name: Execute only the digest-locked released CLI
+        if: steps.core_release.outputs.available == 'true'
         run: |
-          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/report.json" "$SUBJECT_SHA"
-          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/replay.json" "$SUBJECT_SHA"
+          set -euo pipefail
+          lock="$GITHUB_WORKSPACE/contracts/core-release-lock-v1.json"
+          release="$RUNNER_TEMP/core-release.json"
+          destination="$RUNNER_TEMP/released-gooo"
+          extract="$RUNNER_TEMP/released-gooo-extract"
+          mkdir -p "$destination" "$extract"
+
+          binary_asset="$(jq -r .consumer.binary_asset "$lock")"
+          checksum_asset="$(jq -r .consumer.checksum_asset "$lock")"
+          binary_url="$(jq -r --arg name "$binary_asset" '.release.assets[]|select(.name==$name)|.browser_download_url' "$release")"
+          checksum_url="$(jq -r --arg name "$checksum_asset" '.release.assets[]|select(.name==$name)|.browser_download_url' "$release")"
+          curl --fail --location --retry 3 "$binary_url" --output "$destination/$binary_asset"
+          curl --fail --location --retry 3 "$checksum_url" --output "$destination/$checksum_asset"
+
+          binary_digest="sha256:$(sha256sum "$destination/$binary_asset" | awk '{print $1}')"
+          api_digest="$(jq -r --arg name "$binary_asset" '.release.assets[]|select(.name==$name)|.digest' "$release")"
+          locked_digest="$(jq -r --arg name "$binary_asset" '.assets[]|select(.name==$name)|.digest' "$lock")"
+          checksum_digest="sha256:$(awk -v name="$binary_asset" '$2==name {print $1}' "$destination/$checksum_asset")"
+          test "$binary_digest" = "$api_digest"
+          test "$binary_digest" = "$locked_digest"
+          test "$binary_digest" = "$checksum_digest"
+
+          tar -xzf "$destination/$binary_asset" -C "$extract"
+          before="$RUNNER_TEMP/repository-before.bin"
+          after="$RUNNER_TEMP/repository-after.bin"
+          git status --porcelain=v1 -z --untracked-files=all > "$before"
+          "$extract/gooo" version --json > "$RUNNER_TEMP/version.json"
+          "$extract/gooo" check --json examples/read-only-observer/main.gooo > "$RUNNER_TEMP/check.json"
+          git status --porcelain=v1 -z --untracked-files=all > "$after"
+          if cmp -s "$before" "$after"; then repository_writes=0; else repository_writes=1; fi
+
+          before_digest="sha256:$(sha256sum "$before" | awk '{print $1}')"
+          after_digest="sha256:$(sha256sum "$after" | awk '{print $1}')"
+          source_digest="sha256:$(sha256sum examples/read-only-observer/main.gooo | awk '{print $1}')"
+          jq -n \
+            --arg head "$SUBJECT_SHA" \
+            --arg asset "$binary_asset" \
+            --arg digest "$binary_digest" \
+            --arg api_digest "$api_digest" \
+            --arg checksum_digest "$checksum_digest" \
+            --arg source_digest "$source_digest" \
+            --arg before_digest "$before_digest" \
+            --arg after_digest "$after_digest" \
+            --argjson writes "$repository_writes" \
+            --slurpfile version "$RUNNER_TEMP/version.json" \
+            --slurpfile check "$RUNNER_TEMP/check.json" \
+            '{schema:"gooo/released-cli-observation/v1",available:true,subject_sha:$head,
+              binary:{asset_name:$asset,digest:$digest,api_digest:$api_digest,
+                checksum_digest:$checksum_digest,checksum_verified:($digest==$checksum_digest)},
+              version:$version[0],check:$check[0],
+              source:{path:"examples/read-only-observer/main.gooo",digest:$source_digest},
+              repository:{before_digest:$before_digest,after_digest:$after_digest,writes:$writes}}' \
+            > "$RUNNER_TEMP/runtime.json"
+
+      - name: Preserve unavailable runtime as explicit unknown
+        if: steps.core_release.outputs.available != 'true'
+        run: |
+          jq -n --arg head "$SUBJECT_SHA" \
+            '{schema:"gooo/released-cli-observation/v1",available:false,subject_sha:$head,
+              reason:"PINNED_CORE_RELEASE_NOT_AVAILABLE",binary:null,version:null,check:null,source:null,
+              repository:{before_digest:null,after_digest:null,writes:null}}' > "$RUNNER_TEMP/runtime.json"
+
+      - name: Evaluate initial unknown and close it through a predecessor
+        run: |
+          jq -n '{schema:"gooo/workgraph-readiness-predecessor/v1",available:false}' > "$RUNNER_TEMP/no-predecessor.json"
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/no-predecessor.json" "$RUNNER_TEMP/initial.json" "$SUBJECT_SHA"
+          jq -e '.decision == "PROGRESS_OBSERVED" and .resolution == "PREREQUISITE_CLASS" and
+            .summary.total_tasks == 12 and .summary.closed_tasks == 10 and .summary.unknown_tasks == 2 and .summary.refuted_tasks == 0 and
+            .summary.repository_writes == 0 and .claim.stage == "EVALUATOR" and .claim.step == "OBSERVE_INITIAL_REPORT" and
+            .claim.reason == "INITIAL_REPORT_NOT_OBSERVED" and .claim.next_operation == "EVALUATE_READ_ONLY_OBSERVATION"' \
+            "$RUNNER_TEMP/initial.json" >/dev/null
+
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/initial.json" "$RUNNER_TEMP/report.json" "$SUBJECT_SHA"
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/initial.json" "$RUNNER_TEMP/replay.json" "$SUBJECT_SHA"
           cmp -s "$RUNNER_TEMP/report.json" "$RUNNER_TEMP/replay.json"
-          jq -e '.summary.total_tasks == 12 and ((.summary.closed_tasks + .summary.unknown_tasks + .summary.refuted_tasks) == 12)' "$RUNNER_TEMP/report.json" >/dev/null
-          jq -e '.summary.repository_writes == null and (.indicators[] | select(.id == "gooo.metric.workgraph.repository-writes.v1") | .state == "UNKNOWN")' "$RUNNER_TEMP/report.json" >/dev/null
-          if jq -e '.available == false' "$RUNNER_TEMP/core-release.json" >/dev/null; then
-            jq -e '.decision == "PROGRESS_OBSERVED" and .resolution == "PREREQUISITE_CLASS" and .reason == "CORE_RELEASE_NOT_AVAILABLE" and .summary.closed_tasks == 4 and .summary.unknown_tasks == 8 and .summary.refuted_tasks == 0 and .claim.stage == "RELEASE" and .claim.step == "OBSERVE_CORE_RELEASE"' "$RUNNER_TEMP/report.json" >/dev/null
-          fi
-      - name: Refute a non-public repository counterexample
+          jq -e '.decision == "READ_ONLY_OBSERVER_READY" and .resolution == "EXACT" and
+            .summary.total_tasks == 12 and .summary.closed_tasks == 12 and .summary.unknown_tasks == 0 and .summary.refuted_tasks == 0 and
+            .summary.repository_writes == 0 and .claim.status == "DISCHARGED" and .claim.state == "CLOSED" and
+            .predecessor.report_digest != null and .predecessor.claim.stage == "EVALUATOR" and
+            ([.proofs[]|select(.closed==.total)]|length) == 3 and
+            (.indicators[]|select(.id=="gooo.metric.workgraph.repository-writes.v2")|.state=="SATISFIED")' \
+            "$RUNNER_TEMP/report.json" >/dev/null
+
+      - name: Refute repository and release contradictions
         run: |
           jq '.visibility="private" | .private=true' "$RUNNER_TEMP/repository.json" > "$RUNNER_TEMP/private-repository.json"
-          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/private-repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/refuted.json" "$SUBJECT_SHA"
-          jq -e '.decision == "FAIL_CLOSED" and .resolution == "EXACT" and .reason == "PUBLIC_REPOSITORY_NOT_PUBLIC" and .summary.refuted_tasks == 1 and .claim.status == "CONTESTED"' "$RUNNER_TEMP/refuted.json" >/dev/null
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/private-repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/initial.json" "$RUNNER_TEMP/private-refuted.json" "$SUBJECT_SHA"
+          jq -e '.decision == "FAIL_CLOSED" and .resolution == "EXACT" and .reason == "PUBLIC_REPOSITORY_NOT_PUBLIC" and
+            .summary.refuted_tasks == 1 and .claim.status == "CONTESTED"' "$RUNNER_TEMP/private-refuted.json" >/dev/null
+
+          jq '(.release.assets[]|select(.name=="gooo-linux-amd64.tar.gz").digest)="sha256:0000000000000000000000000000000000000000000000000000000000000000"' \
+            "$RUNNER_TEMP/core-release.json" > "$RUNNER_TEMP/tampered-release.json"
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/tampered-release.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/initial.json" "$RUNNER_TEMP/release-refuted.json" "$SUBJECT_SHA"
+          jq -e '.decision == "FAIL_CLOSED" and .resolution == "EXACT" and .reason == "CORE_RELEASE_ASSET_SET_MISMATCH" and
+            .summary.refuted_tasks == 1 and .claim.stage == "RELEASE" and .claim.step == "LOCK_CORE_RELEASE_ASSET_SET"' \
+            "$RUNNER_TEMP/release-refuted.json" >/dev/null
+
+      - name: Enforce read-only repository effect
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
       - uses: actions/upload-artifact@v6
         with:
-          name: read-only-observer-readiness-${{ env.SUBJECT_SHA }}
+          name: released-cli-readiness-${{ env.SUBJECT_SHA }}
           path: |
             ${{ runner.temp }}/repository.json
             ${{ runner.temp }}/core-release.json
+            ${{ runner.temp }}/runtime.json
+            ${{ runner.temp }}/initial.json
             ${{ runner.temp }}/report.json
             ${{ runner.temp }}/replay.json
-            ${{ runner.temp }}/refuted.json
+            ${{ runner.temp }}/private-refuted.json
+            ${{ runner.temp }}/release-refuted.json

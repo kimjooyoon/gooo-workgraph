@@ -1,0 +1,20 @@
+{
+  "schema": "gooo/workgraph-release-readiness-denominator/v2",
+  "denominator_id": "gooo.denominator.workgraph.read-only-observer.v2",
+  "version": 2,
+  "target_tasks": 12,
+  "tasks": [
+    {"id":"PUBLIC_REPOSITORY","activity":"ObservePublicRepository","stage":"REPOSITORY","step":"OBSERVE_PUBLIC_REPOSITORY","proof_choice":"FOUNDATION","closed_reason":"PUBLIC_REPOSITORY_OBSERVED","unknown_reason":"PUBLIC_REPOSITORY_NOT_OBSERVED","next_operation":"OBSERVE_PUBLIC_REPOSITORY"},
+    {"id":"GOOO_AUTHORITY_DECLARED","activity":"DeclareGoooAuthority","stage":"SOURCE","step":"DECLARE_GOOO_AUTHORITY","proof_choice":"FOUNDATION","closed_reason":"GOOO_AUTHORITY_DECLARED","unknown_reason":"GOOO_AUTHORITY_NOT_DECLARED","next_operation":"DECLARE_GOOO_AUTHORITY","bootstrap_closed":true},
+    {"id":"CONTRACT_VERSIONED","activity":"VersionWorkgraphContract","stage":"CONTRACT","step":"VERSION_WORKGRAPH_CONTRACT","proof_choice":"FOUNDATION","closed_reason":"WORKGRAPH_CONTRACT_VERSIONED","unknown_reason":"WORKGRAPH_CONTRACT_NOT_VERSIONED","next_operation":"VERSION_WORKGRAPH_CONTRACT","bootstrap_closed":true},
+    {"id":"RFC_PUBLISHED","activity":"PublishContractRFC","stage":"CONTRACT","step":"PUBLISH_CONTRACT_RFC","proof_choice":"COHERENCE","closed_reason":"CONTRACT_RFC_PUBLISHED","unknown_reason":"CONTRACT_RFC_NOT_PUBLISHED","next_operation":"PUBLISH_CONTRACT_RFC","bootstrap_closed":true},
+    {"id":"CORE_RELEASE_AVAILABLE","activity":"ObserveCoreRelease","stage":"RELEASE","step":"OBSERVE_PINNED_CORE_RELEASE","proof_choice":"FOUNDATION","closed_reason":"PINNED_CORE_RELEASE_OBSERVED","unknown_reason":"PINNED_CORE_RELEASE_NOT_AVAILABLE","next_operation":"OBSERVE_PINNED_CORE_RELEASE"},
+    {"id":"CORE_BINARY_DIGEST_LOCKED","activity":"LockCoreBinaryDigest","stage":"RELEASE","step":"LOCK_CORE_RELEASE_ASSET_SET","proof_choice":"FOUNDATION","closed_reason":"CORE_RELEASE_ASSET_SET_LOCKED","unknown_reason":"CORE_RELEASE_ASSETS_NOT_LOCKED","next_operation":"VERIFY_CORE_RELEASE_ASSET_SET"},
+    {"id":"CORE_VERSION_SCHEMA_ADVERTISED","activity":"ExecuteReleasedVersion","stage":"COMPILER","step":"EXECUTE_RELEASED_VERSION","proof_choice":"COHERENCE","closed_reason":"RELEASED_VERSION_RECEIPT_OBSERVED","unknown_reason":"RELEASED_VERSION_RECEIPT_NOT_OBSERVED","next_operation":"EXECUTE_RELEASED_GOOO_VERSION"},
+    {"id":"CORE_CHECK_RECEIPT_OBSERVED","activity":"ExecuteReleasedCheck","stage":"COMPILER","step":"EXECUTE_RELEASED_CHECK","proof_choice":"COHERENCE","closed_reason":"RELEASED_CHECK_RECEIPT_OBSERVED","unknown_reason":"RELEASED_CHECK_RECEIPT_NOT_OBSERVED","next_operation":"EXECUTE_RELEASED_GOOO_CHECK"},
+    {"id":"SOURCE_HEAD_BOUND","activity":"BindSourceHead","stage":"SOURCE","step":"BIND_SOURCE_HEAD","proof_choice":"FOUNDATION","closed_reason":"SOURCE_HEAD_BOUND","unknown_reason":"SOURCE_HEAD_BINDING_NOT_OBSERVED","next_operation":"BIND_SOURCE_TO_EXACT_HEAD"},
+    {"id":"REPOSITORY_ZERO_WRITE_OBSERVED","activity":"ObserveRepositoryWrites","stage":"EFFECT","step":"OBSERVE_REPOSITORY_WRITES","proof_choice":"REGRESSION","closed_reason":"REPOSITORY_ZERO_WRITE_OBSERVED","unknown_reason":"REPOSITORY_WRITE_EFFECT_NOT_OBSERVED","next_operation":"RUN_PRE_POST_REPOSITORY_SNAPSHOT"},
+    {"id":"INITIAL_REPORT_OBSERVED","activity":"ObserveInitialReport","stage":"EVALUATOR","step":"OBSERVE_INITIAL_REPORT","proof_choice":"COHERENCE","closed_reason":"INITIAL_REPORT_OBSERVED","unknown_reason":"INITIAL_REPORT_NOT_OBSERVED","next_operation":"EVALUATE_READ_ONLY_OBSERVATION"},
+    {"id":"UNKNOWN_TRACE_PRESERVED","activity":"PreserveUnknownTrace","stage":"USER","step":"PRESERVE_UNKNOWN_TRACE","proof_choice":"REGRESSION","closed_reason":"UNKNOWN_TRACE_PRESERVED","unknown_reason":"UNKNOWN_TRACE_NOT_OBSERVED","next_operation":"PRESERVE_UNKNOWN_COORDINATES"}
+  ]
+}
