@@ -12,8 +12,14 @@ permissions:
 jobs:
   readiness:
     runs-on: ubuntu-latest
+    env:
+      SUBJECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.SUBJECT_SHA }}
+      - name: Bind exact subject identity
+        run: test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
       - name: Capture public repository observation
         env:
           GH_TOKEN: ${{ github.token }}
@@ -33,8 +39,8 @@ jobs:
           fi
       - name: Evaluate and replay fixed readiness evidence
         run: |
-          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/report.json" "$GITHUB_SHA"
-          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/replay.json" "$GITHUB_SHA"
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/report.json" "$SUBJECT_SHA"
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/replay.json" "$SUBJECT_SHA"
           cmp -s "$RUNNER_TEMP/report.json" "$RUNNER_TEMP/replay.json"
           jq -e '.summary.total_tasks == 12 and ((.summary.closed_tasks + .summary.unknown_tasks + .summary.refuted_tasks) == 12)' "$RUNNER_TEMP/report.json" >/dev/null
           jq -e '.summary.repository_writes == null and (.indicators[] | select(.id == "gooo.metric.workgraph.repository-writes.v1") | .state == "UNKNOWN")' "$RUNNER_TEMP/report.json" >/dev/null
@@ -44,11 +50,11 @@ jobs:
       - name: Refute a non-public repository counterexample
         run: |
           jq '.visibility="private" | .private=true' "$RUNNER_TEMP/repository.json" > "$RUNNER_TEMP/private-repository.json"
-          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/private-repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/refuted.json" "$GITHUB_SHA"
+          bash scripts/readiness-report.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/private-repository.json" "$RUNNER_TEMP/core-release.json" "$RUNNER_TEMP/refuted.json" "$SUBJECT_SHA"
           jq -e '.decision == "FAIL_CLOSED" and .resolution == "EXACT" and .reason == "PUBLIC_REPOSITORY_NOT_PUBLIC" and .summary.refuted_tasks == 1 and .claim.status == "CONTESTED"' "$RUNNER_TEMP/refuted.json" >/dev/null
       - uses: actions/upload-artifact@v6
         with:
-          name: read-only-observer-readiness-${{ github.sha }}
+          name: read-only-observer-readiness-${{ env.SUBJECT_SHA }}
           path: |
             ${{ runner.temp }}/repository.json
             ${{ runner.temp }}/core-release.json
