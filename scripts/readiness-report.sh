@@ -112,7 +112,7 @@ jq -n \
   def graph_ok:
     $runtime[0].available == true and
     $runtime[0].graph.schema_version == $lock[0].schemas.graph and
-    ($runtime[0].graph.source.digest | valid_raw_digest) and
+    ($runtime[0].graph.source_digest | valid_raw_digest) and
     $runtime[0].graph.ir.status == "available" and
     ($runtime[0].graph.ir.semantic_digest | valid_raw_digest) and
     ($runtime[0].graph.graph_hash | valid_raw_digest) and
@@ -123,7 +123,7 @@ jq -n \
     $runtime[0].subject_sha == $head and
     $runtime[0].source.path == "examples/read-only-observer/main.gooo" and
     ($runtime[0].source.digest | valid_digest) and
-    $runtime[0].source.digest == ("sha256:" + $runtime[0].graph.source.digest);
+    $runtime[0].source.digest == ("sha256:" + $runtime[0].graph.source_digest);
   def repository_zero_write:
     $runtime[0].available == true and
     $runtime[0].repository.writes == 0 and
@@ -207,7 +207,7 @@ jq -n \
      semantic_check_status:$runtime[0].semantic_check.status,
      semantic_hash:$runtime[0].semantic_check.semantic_hash,
      graph_schema:$runtime[0].graph.schema_version,
-     graph_source_digest:$runtime[0].graph.source.digest,
+     graph_source_digest:$runtime[0].graph.source_digest,
      semantic_ir_digest:$runtime[0].graph.ir.semantic_digest,
      graph_hash:$runtime[0].graph.graph_hash,
      activity_bindings:meta_binding_count,
