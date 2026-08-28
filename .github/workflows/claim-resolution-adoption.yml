@@ -1,0 +1,211 @@
+name: Workgraph claim resolution adoption
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adoption:
+    runs-on: ubuntu-latest
+    env:
+      SUBJECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.SUBJECT_SHA }}
+      - name: Bind exact subject identity
+        run: test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
+      - name: Download immutable core and Workgraph releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          lock=contracts/claim-resolution-adoption-release-lock-v1.json
+          mkdir -p "$RUNNER_TEMP/core" "$RUNNER_TEMP/workgraph" "$RUNNER_TEMP/workgraph-actions"
+          for scope in core workgraph; do
+            repository=$(jq -r ".$scope.repository" "$lock")
+            tag=$(jq -r ".$scope.tag" "$lock")
+            target=$(jq -r ".$scope.target_commit_sha" "$lock")
+            release_id=$(jq -r ".$scope.release_id" "$lock")
+            prerelease=$(jq -r ".$scope.prerelease" "$lock")
+            gh api "repos/$repository/releases/tags/$tag" > "$RUNNER_TEMP/$scope-release.json"
+            gh api "repos/$repository/git/ref/tags/$tag" > "$RUNNER_TEMP/$scope-ref.json"
+            jq -e --arg tag "$tag" --arg target "$target" --argjson release_id "$release_id" --argjson prerelease "$prerelease" \
+              '.id==$release_id and .tag_name==$tag and .target_commitish==$target and .draft==false and .prerelease==$prerelease' "$RUNNER_TEMP/$scope-release.json" >/dev/null
+            jq -e --arg target "$target" '.object.type=="commit" and .object.sha==$target' "$RUNNER_TEMP/$scope-ref.json" >/dev/null
+          done
+          download_asset() {
+            scope=$1; selector=$2; destination=$3; release="$RUNNER_TEMP/$scope-release.json"
+            name=$(jq -r ".$scope.$selector.name" "$lock"); id=$(jq -r ".$scope.$selector.id" "$lock")
+            size=$(jq -r ".$scope.$selector.size" "$lock"); digest=$(jq -r ".$scope.$selector.digest" "$lock")
+            jq -e --arg name "$name" --arg digest "$digest" --argjson id "$id" --argjson size "$size" \
+              '.assets[]|select(.name==$name and .id==$id and .size==$size and .digest==$digest)' "$release" >/dev/null
+            url=$(jq -r --arg name "$name" '.assets[]|select(.name==$name)|.browser_download_url' "$release")
+            curl --fail --location --retry 3 "$url" --output "$destination"
+            test "$(wc -c < "$destination"|tr -d ' ')" -eq "$size"
+            test "sha256:$(sha256sum "$destination"|awk '{print $1}')" = "$digest"
+          }
+          download_asset core binary_asset "$RUNNER_TEMP/core/gooo.tar.gz"
+          download_asset core checksum_asset "$RUNNER_TEMP/core/SHA256SUMS"
+          core_binary=$(jq -r '.core.binary_asset.name' "$lock")
+          test "$(sha256sum "$RUNNER_TEMP/core/gooo.tar.gz"|awk '{print $1}')" = "$(awk -v name="$core_binary" '$2==name {print $1}' "$RUNNER_TEMP/core/SHA256SUMS")"
+          tar -xzf "$RUNNER_TEMP/core/gooo.tar.gz" -C "$RUNNER_TEMP/core"
+          download_asset workgraph actions_asset "$RUNNER_TEMP/workgraph/actions.tar.gz"
+          download_asset workgraph report_asset "$RUNNER_TEMP/workgraph/report.json"
+          download_asset workgraph complete_asset "$RUNNER_TEMP/workgraph/complete.json"
+          download_asset workgraph checksum_asset "$RUNNER_TEMP/workgraph/SHA256SUMS"
+          tar -xzf "$RUNNER_TEMP/workgraph/actions.tar.gz" -C "$RUNNER_TEMP/workgraph-actions"
+          cmp -s "$RUNNER_TEMP/workgraph/report.json" "$RUNNER_TEMP/workgraph-actions/workspace-report.json"
+          cmp -s "$RUNNER_TEMP/workgraph/complete.json" "$RUNNER_TEMP/workgraph-actions/workspace-complete.json"
+          for selector in actions_asset report_asset complete_asset; do
+            name=$(jq -r ".workgraph.$selector.name" "$lock")
+            expected=$(jq -r ".workgraph.$selector.digest" "$lock" | cut -d: -f2)
+            test "$expected" = "$(awk -v name="$name" '$2==name {print $1}' "$RUNNER_TEMP/workgraph/SHA256SUMS")"
+          done
+          jq -e '.go_version=="go1.27.0" and .ci_test_cases==3 and .go_fix_writes==0 and .local_tests_run==0' "$RUNNER_TEMP/workgraph-actions/toolchain.json" >/dev/null
+      - name: Resolve twelve Gooo meta activities
+        run: |
+          set -euo pipefail
+          gooo="$RUNNER_TEMP/core/gooo"
+          source=examples/claim-resolution-adoption/main.gooo
+          receipts="$RUNNER_TEMP/receipts"
+          mkdir -p "$receipts"
+          git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/before.bin"
+          "$gooo" version --json > "$RUNNER_TEMP/version.json"
+          "$gooo" check --semantic --json "$source" > "$RUNNER_TEMP/semantic.json"
+          valid_zero=0; invalid_nonzero=0
+          run_claim() {
+            activity=$1; expectation=$2
+            set +e
+            "$gooo" claim resolve "$source" --activity "$activity" --json > "$receipts/$activity.json"
+            status=$?
+            set -e
+            if test "$expectation" = valid; then test "$status" -eq 0; valid_zero=$((valid_zero+1)); else test "$status" -ne 0; invalid_nonzero=$((invalid_nonzero+1)); fi
+          }
+          for activity in ObserveReleasedWorkgraph ObserveReleasedClaimPrimitive BindReleasedClosedWorkspaceClaim \
+            BindReleasedUnknownWorkspaceClaim PreserveReleasedUnknownWorkspaceClaim BindReleasedRefutedWorkspaceClaim \
+            PreserveReleasedRefutedWorkspaceClaim ReplayWorkspaceClaimResolution ObserveReadOnlyEffect; do
+            run_claim "$activity" valid
+          done
+          start_ns=$(date +%s%N)
+          set +e
+          /usr/bin/time -v -o "$RUNNER_TEMP/claim-time.txt" "$gooo" claim resolve "$source" --activity ResolveReleasedClosedWorkspaceClaim --json > "$receipts/ResolveReleasedClosedWorkspaceClaim.json"
+          measured_status=$?
+          set -e
+          test "$measured_status" -eq 0
+          valid_zero=$((valid_zero+1))
+          end_ns=$(date +%s%N); wall_ms=$(( (end_ns-start_ns)/1000000 ))
+          peak_rss_kib=$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$RUNNER_TEMP/claim-time.txt")
+          run_claim RejectIncompleteUnknownTuple invalid
+          run_claim RejectUnknownParentDecision invalid
+          test "$valid_zero" -eq 10; test "$invalid_nonzero" -eq 2
+          "$gooo" claim resolve "$source" --activity ReplayWorkspaceClaimResolution --json > "$receipts/ReplayWorkspaceClaimResolution.replay.json"
+          cmp -s "$receipts/ReplayWorkspaceClaimResolution.json" "$receipts/ReplayWorkspaceClaimResolution.replay.json"
+          module_roots=$(find . -name go.mod -not -path './.git/*' | wc -l | tr -d ' ')
+          test "$module_roots" -eq 1
+          git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/after.bin"
+          if cmp -s "$RUNNER_TEMP/before.bin" "$RUNNER_TEMP/after.bin"; then writes=0; else writes=1; fi
+          jq -n --arg subject_sha "$SUBJECT_SHA" --argjson peak_rss_kib "$peak_rss_kib" --argjson wall_ms "$wall_ms" \
+            --argjson writes "$writes" --argjson module_roots "$module_roots" --slurpfile version "$RUNNER_TEMP/version.json" \
+            '{schema:"gooo/workgraph/claim-resolution-adoption-runtime/v1",subject_sha:$subject_sha,version:$version[0],
+              core_release_observed:true,workgraph_release_observed:true,
+              performance:{claim_resolve_peak_rss_kib:$peak_rss_kib,claim_resolve_wall_ms:$wall_ms},
+              process:{unique_activities:12,valid_receipts:10,invalid_receipts:2,replay_calls:1,total_calls:13},repository:{writes:$writes},
+              authority:{generator_authority:false,cross_project_required_gates:0,local_test_executions:0,
+                current_go_module_roots:$module_roots,adoption_go_fix_executions:0}}' > "$RUNNER_TEMP/runtime.json"
+      - name: Evaluate direct adoption and resolution counterexamples
+        run: |
+          set -euo pipefail
+          evaluator=scripts/claim-resolution-adoption-report.sh
+          common=("$GITHUB_WORKSPACE" "$RUNNER_TEMP/receipts" "$RUNNER_TEMP/workgraph-actions" "$RUNNER_TEMP/workgraph/report.json")
+          bash "$evaluator" "${common[@]}" "$RUNNER_TEMP/workgraph/complete.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/report.json" "$SUBJECT_SHA" complete
+          jq -e '.decision=="WORKGRAPH_CLAIM_RESOLUTION_ADOPTED" and .summary=={closed:12,dependency_blocked:0,direct_missing:0,refuted:0,total:12,unknown:0} and
+            .adoption.direct_mappings==1 and .adoption.direct_mapping_total==1 and .adoption.released_scenarios==3 and .adoption.released_scenario_total==3 and
+            .adoption.released_claim_fields==18 and .adoption.released_claim_field_total==18 and .adoption.core_claim_fields==18 and .adoption.core_claim_field_total==18 and
+            .adoption.workspace_inventory_facts==9 and .adoption.workspace_inventory_fact_total==9 and
+            .adoption.invalid_tuples_rejected==2 and .adoption.invalid_tuple_total==2 and .adoption.activities_bound==12 and .adoption.activity_total==12 and
+            .adoption.release_locks_observed==2 and .adoption.release_lock_total==2 and
+            ([.proofs[]|select(.closed==4 and .total==4)]|length)==3 and ([.indicator_classes[]|select(.closed==4 and .total==4)]|length)==3 and
+            .authority.generator_authority==false and .authority.cross_project_required_gates==0 and .authority.local_test_executions==0 and
+            .authority.current_go_module_roots==1 and .authority.adoption_go_fix_executions==0 and .authority.released_ci_test_cases==3 and
+            .authority.released_go_fix_writes==0 and .authority.root_readme_readiness=="EXCLUDED" and .authority.repository_writes==0' "$RUNNER_TEMP/report.json" >/dev/null
+
+          cp -R "$RUNNER_TEMP/receipts" "$RUNNER_TEMP/missing-receipts"
+          rm "$RUNNER_TEMP/missing-receipts/PreserveReleasedUnknownWorkspaceClaim.json"
+          bash "$evaluator" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/missing-receipts" "$RUNNER_TEMP/workgraph-actions" "$RUNNER_TEMP/workgraph/report.json" \
+            "$RUNNER_TEMP/workgraph/complete.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/missing-receipt.json" "$SUBJECT_SHA" missing-core-receipt
+          jq -e '.decision=="ADOPTION_EVIDENCE_UNKNOWN" and .summary.closed==11 and .summary.unknown==1 and .summary.refuted==0 and
+            .claim.stage=="CORE_RECEIPT" and .claim.step=="OBSERVE_CLAIM_RESOLUTION_RECEIPT" and .claim.reason=="CORE_CLAIM_RESOLUTION_RECEIPT_UNAVAILABLE" and
+            .claim.unknown_class=="DIRECT_MISSING" and .claim.next_operation=="PROVIDE_CORE_CLAIM_RESOLUTION_RECEIPT"' "$RUNNER_TEMP/missing-receipt.json" >/dev/null
+
+          cp -R "$RUNNER_TEMP/workgraph-actions" "$RUNNER_TEMP/missing-upstream-actions"
+          rm "$RUNNER_TEMP/missing-upstream-actions/workspace-unknown.json"
+          bash "$evaluator" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/receipts" "$RUNNER_TEMP/missing-upstream-actions" "$RUNNER_TEMP/workgraph/report.json" \
+            "$RUNNER_TEMP/workgraph/complete.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/missing-upstream.json" "$SUBJECT_SHA" missing-upstream-unknown
+          jq -e '.decision=="ADOPTION_EVIDENCE_UNKNOWN" and .summary.closed==10 and .summary.unknown==2 and .summary.refuted==0 and
+            .claim.stage=="WORKGRAPH_RELEASE_EVIDENCE" and .claim.step=="OBSERVE_RELEASED_WORKSPACE_UNKNOWN_CLAIM" and
+            .claim.reason=="RELEASED_WORKSPACE_UNKNOWN_CLAIM_UNAVAILABLE" and .claim.unknown_class=="DIRECT_MISSING" and
+            .claim.next_operation=="FETCH_RELEASED_WORKSPACE_UNKNOWN_CLAIM"' "$RUNNER_TEMP/missing-upstream.json" >/dev/null
+
+          cp -R "$RUNNER_TEMP/workgraph-actions" "$RUNNER_TEMP/tampered-actions"
+          jq '.claim.unknown_class="UNSPECIFIED"' "$RUNNER_TEMP/tampered-actions/workspace-unknown.json" > "$RUNNER_TEMP/tampered-workspace-unknown.json"
+          mv "$RUNNER_TEMP/tampered-workspace-unknown.json" "$RUNNER_TEMP/tampered-actions/workspace-unknown.json"
+          bash "$evaluator" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/receipts" "$RUNNER_TEMP/tampered-actions" "$RUNNER_TEMP/workgraph/report.json" \
+            "$RUNNER_TEMP/workgraph/complete.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/tampered-unknown.json" "$SUBJECT_SHA" tampered-unknown
+          jq -e '.decision=="FAIL_CLOSED" and .summary.closed==10 and .summary.refuted==2 and
+            .claim.stage=="WORKGRAPH_RELEASE_EVIDENCE" and .claim.reason=="RELEASED_WORKSPACE_UNKNOWN_CLAIM_MISMATCH"' "$RUNNER_TEMP/tampered-unknown.json" >/dev/null
+
+          jq '.summary.gooo_lines=9' "$RUNNER_TEMP/workgraph/complete.json" > "$RUNNER_TEMP/laundered-complete.json"
+          bash "$evaluator" "${common[@]}" "$RUNNER_TEMP/laundered-complete.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/laundered-inventory.json" "$SUBJECT_SHA" laundered-inventory
+          jq -e '.decision=="FAIL_CLOSED" and .summary.closed==10 and .summary.refuted==2 and
+            .claim.stage=="WORKGRAPH_CLAIM" and .claim.reason=="RELEASED_WORKSPACE_CLOSED_CLAIM_OR_FACT_MISMATCH"' "$RUNNER_TEMP/laundered-inventory.json" >/dev/null
+
+          jq '.authority.cross_project_required_gates=1' "$RUNNER_TEMP/runtime.json" > "$RUNNER_TEMP/escalated-runtime.json"
+          bash "$evaluator" "${common[@]}" "$RUNNER_TEMP/workgraph/complete.json" "$RUNNER_TEMP/escalated-runtime.json" "$RUNNER_TEMP/authority-escalation.json" "$SUBJECT_SHA" authority-escalation
+          jq -e '.decision=="FAIL_CLOSED" and .summary.closed==11 and .summary.refuted==1 and
+            .claim.stage=="AUTHORITY" and .claim.reason=="WORKGRAPH_ADOPTION_AUTHORITY_ESCALATED"' "$RUNNER_TEMP/authority-escalation.json" >/dev/null
+      - name: Publish exact human-readable indicators
+        run: |
+          {
+            echo '## Workgraph claim resolution adoption'
+            echo
+            jq -r '"- decision: \(.decision)","- cells: \(.summary.closed)/\(.summary.total) CLOSED; UNKNOWN \(.summary.unknown); REFUTED \(.summary.refuted)",
+              "- direct mappings: \(.adoption.direct_mappings)/\(.adoption.direct_mapping_total)",
+              "- released scenarios: \(.adoption.released_scenarios)/\(.adoption.released_scenario_total)",
+              "- released claim fields: \(.adoption.released_claim_fields)/\(.adoption.released_claim_field_total)",
+              "- core claim fields: \(.adoption.core_claim_fields)/\(.adoption.core_claim_field_total)",
+              "- workspace facts: \(.adoption.workspace_inventory_facts)/\(.adoption.workspace_inventory_fact_total)",
+              "- invalid tuples rejected: \(.adoption.invalid_tuples_rejected)/\(.adoption.invalid_tuple_total)",
+              "- Gooo meta activities: \(.adoption.activities_bound)/\(.adoption.activity_total)",
+              "- repository files: \(.inventory.repository_files)","- descendant directories: \(.inventory.descendant_directories)",
+              "- Go: \(.inventory.go.files) files, \(.inventory.go.lines) lines","- Gooo: \(.inventory.gooo.files) files, \(.inventory.gooo.lines) lines",
+              "- claim resolve peak RSS: \(.performance.claim_resolve_peak_rss_kib) KiB","- claim resolve wall time: \(.performance.claim_resolve_wall_ms) ms",
+              "- Go module roots: \(.authority.current_go_module_roots)","- released CI tests: \(.authority.released_ci_test_cases)",
+              "- repository writes: \(.authority.repository_writes)","- local tests: \(.authority.local_test_executions)",
+              "- cross-project required gates: \(.authority.cross_project_required_gates)","- generator authority: \(.authority.generator_authority)",
+              "- root README readiness: \(.authority.root_readme_readiness)","","### Per-file language lines",
+              (.inventory.per_file[]|"- \(.path): \(.lines) \(.language) lines")' "$RUNNER_TEMP/report.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Enforce zero source-repository writes
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: workgraph-claim-resolution-adoption-${{ env.SUBJECT_SHA }}
+          path: |
+            ${{ runner.temp }}/report.json
+            ${{ runner.temp }}/runtime.json
+            ${{ runner.temp }}/missing-receipt.json
+            ${{ runner.temp }}/missing-upstream.json
+            ${{ runner.temp }}/tampered-unknown.json
+            ${{ runner.temp }}/laundered-inventory.json
+            ${{ runner.temp }}/authority-escalation.json
+            ${{ runner.temp }}/receipts/*.json
+            ${{ runner.temp }}/workgraph/report.json
+            ${{ runner.temp }}/workgraph/complete.json
+            ${{ runner.temp }}/workgraph-actions/toolchain.json

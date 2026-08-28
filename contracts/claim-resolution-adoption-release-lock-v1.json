@@ -1,0 +1,23 @@
+{
+  "schema": "gooo/workgraph/claim-resolution-adoption-release-lock/v1",
+  "core": {
+    "repository": "kimjooyoon/meta-ontology-go",
+    "tag": "v0.3.0-dev",
+    "release_id": 378384811,
+    "target_commit_sha": "5b7af77549d88ba345550c1428323797e6ce1fd8",
+    "prerelease": true,
+    "binary_asset": {"id": 533579198, "name": "gooo-linux-amd64.tar.gz", "size": 7036826, "digest": "sha256:505608f28ccc92ba191d590b3cac160be14955405c159f9dc7fb3c8826985a5e"},
+    "checksum_asset": {"id": 533579199, "name": "SHA256SUMS", "size": 614, "digest": "sha256:ace1c645109d18f62c6fce071b3e573d423a0dc40519b238b2acbe2c6c32900a"}
+  },
+  "workgraph": {
+    "repository": "kimjooyoon/gooo-workgraph",
+    "tag": "v0.2.0-dev",
+    "release_id": 378403083,
+    "target_commit_sha": "d5706ce70cf7e98b5f2fa576894284bb03dcfb15",
+    "prerelease": true,
+    "actions_asset": {"id": 533615122, "name": "workgraph-workspace-inventory-actions-evidence.tar.gz", "size": 7016, "digest": "sha256:2d2da301d5debf43d3de01b26d944a83c24e5bf101825ead02a7398e22ba27d7"},
+    "report_asset": {"id": 533615119, "name": "workgraph-workspace-inventory-report.json", "size": 8829, "digest": "sha256:a2b62a15a95da22d1a8dcc8cf145cf490793164861de220ec4fcf86d6499392a"},
+    "complete_asset": {"id": 533615123, "name": "workgraph-workspace-inventory-complete.json", "size": 1454, "digest": "sha256:f927a72f6494ae4036a7e4a3e12d42d37c66a8d2127a9eecf1ba4345050700ea"},
+    "checksum_asset": {"id": 533615130, "name": "SHA256SUMS", "size": 563, "digest": "sha256:3345fafb68345135d1c8057946ab9a7e8339996234595cc12b628552bc5d2906"}
+  }
+}

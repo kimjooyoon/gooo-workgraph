@@ -1,0 +1,18 @@
+package workgraphclaimresolution
+namespace workgraphclaimresolution
+
+entity WorkspaceClaim id "gooo://workgraph/claim-resolution-adoption/input"
+entity ClaimResolutionPrimitive id "gooo://workgraph/gooo.primitive.claim-resolution-tuple.v1"
+
+activity ObserveReleasedWorkgraph(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=CLOSED;stage=NONE;step=NONE;reason=WORKGRAPH_V0_2_RELEASE_OBSERVED;unknown_class=NONE;next_operation=NONE"
+activity ObserveReleasedClaimPrimitive(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=CLOSED;stage=NONE;step=NONE;reason=CLAIM_RESOLUTION_V0_3_RELEASE_OBSERVED;unknown_class=NONE;next_operation=NONE"
+activity BindReleasedClosedWorkspaceClaim(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=CLOSED;stage=NONE;step=NONE;reason=WORKSPACE_INVENTORY_OBSERVED;unknown_class=NONE;next_operation=NONE"
+activity ResolveReleasedClosedWorkspaceClaim(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=CLOSED;stage=NONE;step=NONE;reason=WORKSPACE_INVENTORY_OBSERVED;unknown_class=NONE;next_operation=NONE"
+activity BindReleasedUnknownWorkspaceClaim(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=UNKNOWN;stage=INPUT;step=OBSERVE_WORKSPACE_ROOT;reason=WORKSPACE_ROOT_NOT_FOUND;unknown_class=DIRECT_MISSING;next_operation=PROVIDE_WORKSPACE_ROOT"
+activity PreserveReleasedUnknownWorkspaceClaim(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=UNKNOWN;stage=INPUT;step=OBSERVE_WORKSPACE_ROOT;reason=WORKSPACE_ROOT_NOT_FOUND;unknown_class=DIRECT_MISSING;next_operation=PROVIDE_WORKSPACE_ROOT"
+activity BindReleasedRefutedWorkspaceClaim(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=REFUTED;stage=INPUT;step=VALIDATE_WORKSPACE_ROOT;reason=WORKSPACE_ROOT_NOT_DIRECTORY;unknown_class=NONE;next_operation=SELECT_WORKSPACE_DIRECTORY"
+activity PreserveReleasedRefutedWorkspaceClaim(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=REFUTED;stage=INPUT;step=VALIDATE_WORKSPACE_ROOT;reason=WORKSPACE_ROOT_NOT_DIRECTORY;unknown_class=NONE;next_operation=SELECT_WORKSPACE_DIRECTORY"
+activity RejectIncompleteUnknownTuple(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=UNKNOWN;stage=INPUT;step=OBSERVE_WORKSPACE_ROOT;reason=WORKSPACE_ROOT_NOT_FOUND;unknown_class=NONE;next_operation=PROVIDE_WORKSPACE_ROOT"
+activity RejectUnknownParentDecision(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=FIXED_POINT;stage=NONE;step=NONE;reason=UNRECOGNIZED_PARENT_DECISION;unknown_class=NONE;next_operation=NONE"
+activity ReplayWorkspaceClaimResolution(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=CLOSED;stage=NONE;step=NONE;reason=WORKSPACE_CLAIM_RESOLUTION_REPLAY_IDENTICAL;unknown_class=NONE;next_operation=NONE"
+activity ObserveReadOnlyEffect(WorkspaceClaim) -> ClaimResolutionPrimitive computes "claim.resolve:v1;state=CLOSED;stage=NONE;step=NONE;reason=READ_ONLY_WORKGRAPH_ADOPTION_OBSERVED;unknown_class=NONE;next_operation=NONE"
