@@ -114,15 +114,36 @@ jobs:
       - name: Bind all metrics to released Gooo semantic activities
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           gooo="$RUNNER_TEMP/core/gooo"
           source=examples/workspace-inventory/main.gooo
           denominator=contracts/workspace-inventory-denominator-v1.json
+          stage=INITIALIZE
+          on_error() {
+            local status=$?
+            trap - ERR
+            set +e
+            printf '::error title=Gooo metric binding failed::stage=%s status=%s\n' "$stage" "$status"
+            for report in "$RUNNER_TEMP/workspace-syntax.json" "$RUNNER_TEMP/workspace-semantic.json" "$RUNNER_TEMP/workspace-graph.json"; do
+              if test -s "$report"; then
+                printf '%s\n' "--- $(basename "$report")"
+                jq -c '{schema_version,status,source_digest,graph_hash,diagnostics,activities:([.nodes[]?|select(.kind=="Activity")|.name])}' "$report" 2>/dev/null || cat "$report"
+              fi
+            done
+            exit "$status"
+          }
+          trap on_error ERR
+
+          stage=GOOO_SYNTAX
           "$gooo" check --json "$source" > "$RUNNER_TEMP/workspace-syntax.json"
+          stage=GOOO_SEMANTICS
           "$gooo" check --semantic --json "$source" > "$RUNNER_TEMP/workspace-semantic.json"
+          stage=GOOO_GRAPH
           "$gooo" graph dump "$source" > "$RUNNER_TEMP/workspace-graph.json"
+          stage=GOOO_RECEIPT_STATUS
           jq -e '.status=="ok"' "$RUNNER_TEMP/workspace-syntax.json" "$RUNNER_TEMP/workspace-semantic.json" >/dev/null
           source_digest="sha256:$(sha256sum "$source" | awk '{print $1}')"
+          stage=GOOO_ACTIVITY_BINDING
           jq -e --arg digest "$source_digest" --slurpfile denominator "$denominator" '
             . as $graph |
             .schema_version=="gooo-graph/v1" and .source_digest==$digest and
@@ -131,6 +152,7 @@ jobs:
               select(([$graph.nodes[]|select(.kind=="Activity" and .name==$cell.activity)]|length)==1)
             ]|length)==12
           ' "$RUNNER_TEMP/workspace-graph.json" >/dev/null
+          stage=CLOSED
           echo '::notice title=Gooo metric binding::12/12 released semantic activities observed'
 
       - name: Observe closed, unknown, refuted, and replay cases
