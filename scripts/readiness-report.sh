@@ -13,9 +13,9 @@ runtime_observation=$4
 predecessor=$5
 output=$6
 head_sha=$7
-denominator="$root/contracts/release-readiness-denominator-v2.json"
+denominator="$root/contracts/release-readiness-denominator-v3.json"
 contract="$root/contracts/workgraph-project-v1.json"
-lock="$root/contracts/core-release-lock-v1.json"
+lock="$root/contracts/core-release-lock-v2.json"
 authority="$root/examples/read-only-observer/main.gooo"
 rfc="$root/docs/rfcs/workgraph-external-consumer-v1.md"
 
@@ -23,17 +23,13 @@ for file in "$denominator" "$contract" "$lock" "$authority" "$rfc" "$repository_
   test -f "$file" || { echo "missing required input: $file" >&2; exit 2; }
 done
 
-jq -e '.schema == "gooo/workgraph-release-readiness-denominator/v2" and .version == 2 and .target_tasks == 12 and (.tasks | length) == 12' "$denominator" >/dev/null
+jq -e '.schema == "gooo/workgraph-release-readiness-denominator/v3" and .version == 3 and .target_tasks == 12 and (.tasks | length) == 12' "$denominator" >/dev/null
 jq -e '.schema == "gooo/workgraph-project/v1" and (.gates | length) == 7' "$contract" >/dev/null
-jq -e '.schema == "gooo/core-release-lock/v1" and (.assets | length) == 8' "$lock" >/dev/null
+jq -e '.schema == "gooo/core-release-lock/v2" and (.assets | length) == 8' "$lock" >/dev/null
 jq -e '.schema == "gooo/public-repository-observation/v1"' "$repository_observation" >/dev/null
 jq -e '.schema == "gooo/core-release-observation/v2"' "$core_observation" >/dev/null
-jq -e '.schema == "gooo/released-cli-observation/v1"' "$runtime_observation" >/dev/null
-jq -e '.schema == "gooo/workgraph-readiness-predecessor/v1" or .schema == "gooo/workgraph-release-readiness-report/v2"' "$predecessor" >/dev/null
-
-while IFS= read -r activity; do
-  grep -Fq "activity $activity(" "$authority" || { echo "unbound Gooo activity: $activity" >&2; exit 3; }
-done < <(jq -r '.tasks[].activity' "$denominator")
+jq -e '.schema == "gooo/released-cli-observation/v2"' "$runtime_observation" >/dev/null
+jq -e '.schema == "gooo/workgraph-readiness-predecessor/v1" or .schema == "gooo/workgraph-release-readiness-report/v3"' "$predecessor" >/dev/null
 
 digest_file() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print "sha256:" $1}';
@@ -66,6 +62,7 @@ jq -n \
   --arg rud "$runtime_digest" \
   --arg pd "$predecessor_digest" '
   def valid_digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
+  def valid_raw_digest: type == "string" and test("^[0-9a-f]{64}$");
   def closed($t; $reason): $t + {state:"CLOSED",resolution:"EXACT",reason:$reason,next_operation:"NONE"};
   def unknown($t): $t + {state:"UNKNOWN",resolution:"PREREQUISITE_CLASS",reason:$t.unknown_reason,next_operation:$t.next_operation};
   def refuted($t; $reason; $next): $t + {state:"REFUTED",resolution:"EXACT",reason:$reason,next_operation:$next};
@@ -93,25 +90,47 @@ jq -n \
     $runtime[0].version.language == "gooo" and
     $runtime[0].version.version == $lock[0].version and
     $runtime[0].version.status == $lock[0].status;
-  def check_ok:
+  def syntax_check_ok:
     $runtime[0].available == true and
-    $runtime[0].check.schema_version == $lock[0].schemas.check and
-    $runtime[0].check.command == "check" and
-    $runtime[0].check.status == "ok" and
-    $runtime[0].check.file == "examples/read-only-observer/main.gooo" and
-    ($runtime[0].check.diagnostics | length) == 0;
+    $runtime[0].syntax_check.schema_version == $lock[0].schemas.check and
+    $runtime[0].syntax_check.command == "check" and
+    $runtime[0].syntax_check.status == "ok" and
+    $runtime[0].syntax_check.file == "examples/read-only-observer/main.gooo" and
+    ($runtime[0].syntax_check.diagnostics | length) == 0;
+  def semantic_check_ok:
+    $runtime[0].available == true and
+    $runtime[0].semantic_check.schema_version == $lock[0].schemas.check and
+    $runtime[0].semantic_check.command == "check" and
+    $runtime[0].semantic_check.status == "ok" and
+    $runtime[0].semantic_check.file == "examples/read-only-observer/main.gooo" and
+    ($runtime[0].semantic_check.diagnostics | length) == 0 and
+    ($runtime[0].semantic_check.semantic_hash | type) == "string" and
+    ($runtime[0].semantic_check.semantic_hash | length) > 0;
+  def denominator_activity_names: [$d[0].tasks[].activity] | sort;
+  def graph_activity_names: [$runtime[0].graph.nodes[]? | select(.kind == "Activity") | .name] | sort;
+  def meta_binding_count: (denominator_activity_names - (denominator_activity_names - graph_activity_names)) | length;
+  def graph_ok:
+    $runtime[0].available == true and
+    $runtime[0].graph.schema_version == $lock[0].schemas.graph and
+    ($runtime[0].graph.source_digest | valid_raw_digest) and
+    $runtime[0].graph.ir.status == "available" and
+    ($runtime[0].graph.ir.semantic_digest | valid_raw_digest) and
+    ($runtime[0].graph.graph_hash | valid_raw_digest) and
+    graph_activity_names == denominator_activity_names;
+  def semantic_receipts_ok: syntax_check_ok and semantic_check_ok and graph_ok;
   def source_head_ok:
     $runtime[0].available == true and
     $runtime[0].subject_sha == $head and
     $runtime[0].source.path == "examples/read-only-observer/main.gooo" and
-    ($runtime[0].source.digest | valid_digest);
+    ($runtime[0].source.digest | valid_digest) and
+    $runtime[0].source.digest == ("sha256:" + $runtime[0].graph.source_digest);
   def repository_zero_write:
     $runtime[0].available == true and
     $runtime[0].repository.writes == 0 and
     ($runtime[0].repository.before_digest | valid_digest) and
     $runtime[0].repository.before_digest == $runtime[0].repository.after_digest;
   def predecessor_ok:
-    $pred[0].schema == "gooo/workgraph-release-readiness-report/v2" and
+    $pred[0].schema == "gooo/workgraph-release-readiness-report/v3" and
     $pred[0].head_sha == $head and
     ($pred[0].report_digest | valid_digest) and
     $pred[0].decision == "PROGRESS_OBSERVED" and
@@ -142,10 +161,10 @@ jq -n \
       if $runtime[0].available != true then unknown(.)
       elif version_ok then closed(.; .closed_reason)
       else refuted(.; "RELEASED_VERSION_RECEIPT_MISMATCH"; "RESTORE_RELEASED_VERSION_CONTRACT") end
-    elif .id == "CORE_CHECK_RECEIPT_OBSERVED" then
+    elif .id == "CORE_SEMANTIC_RECEIPTS_OBSERVED" then
       if $runtime[0].available != true then unknown(.)
-      elif check_ok then closed(.; .closed_reason)
-      else refuted(.; "RELEASED_CHECK_RECEIPT_MISMATCH"; "RESTORE_RELEASED_CHECK_CONTRACT") end
+      elif semantic_receipts_ok then closed(.; .closed_reason)
+      else refuted(.; "RELEASED_SEMANTIC_RECEIPTS_MISMATCH"; "RESTORE_RELEASED_SEMANTIC_RECEIPTS") end
     elif .id == "SOURCE_HEAD_BOUND" then
       if $runtime[0].available != true then unknown(.)
       elif source_head_ok then closed(.; .closed_reason)
@@ -171,7 +190,7 @@ jq -n \
   ([$cells[]|select(.state=="UNKNOWN")]|length) as $unknown |
   ([$cells[]|select(.state=="REFUTED")]|length) as $refuted |
   (if $runtime[0].available == true and ($runtime[0].repository.writes|type) == "number" then $runtime[0].repository.writes else null end) as $writes |
-  {schema:"gooo/workgraph-release-readiness-report/v2",head_sha:$head,
+  {schema:"gooo/workgraph-release-readiness-report/v3",head_sha:$head,
    repository:$repo[0].full_name,
    decision:(if $refuted>0 then "FAIL_CLOSED" elif $unknown>0 then "PROGRESS_OBSERVED" else "READ_ONLY_OBSERVER_READY" end),
    resolution:(if $refuted>0 or $unknown==0 then "EXACT" else "PREREQUISITE_CLASS" end),
@@ -180,6 +199,19 @@ jq -n \
    promotion_authorized:false,
    source:{denominator_digest:$dd,contract_digest:$cd,core_lock_digest:$ld,authority_digest:$ad,
      core_observation_digest:$cod,runtime_observation_digest:$rud},
+   released_cli:{
+     version_schema:$runtime[0].version.schema_version,
+     syntax_check_schema:$runtime[0].syntax_check.schema_version,
+     syntax_check_status:$runtime[0].syntax_check.status,
+     semantic_check_schema:$runtime[0].semantic_check.schema_version,
+     semantic_check_status:$runtime[0].semantic_check.status,
+     semantic_hash:$runtime[0].semantic_check.semantic_hash,
+     graph_schema:$runtime[0].graph.schema_version,
+     graph_source_digest:$runtime[0].graph.source_digest,
+     semantic_ir_digest:$runtime[0].graph.ir.semantic_digest,
+     graph_hash:$runtime[0].graph.graph_hash,
+     activity_bindings:meta_binding_count,
+     activity_total:12},
    predecessor:(if predecessor_ok then {artifact_digest:$pd,report_digest:$pred[0].report_digest,claim:$pred[0].claim,summary:$pred[0].summary} else null end),
    cells:$cells,
    claim:{id:"workgraph://claim/read-only-observer-release-readiness",status:(if $refuted>0 then "CONTESTED" elif $unknown>0 then "ACTIVE" else "DISCHARGED" end),
@@ -191,14 +223,14 @@ jq -n \
      next_operation:(if $refuted>0 then $first_refuted.next_operation elif $unknown>0 then $first_unknown.next_operation else "NONE" end)},
    summary:{total_tasks:12,closed_tasks:$closed,unknown_tasks:$unknown,refuted_tasks:$refuted,repository_writes:$writes},
    indicators:[
-     {id:"gooo.metric.workgraph.release-readiness.v2",class:"OUTCOME",value:$closed,total:12,target:12,unit:"tasks",proof_choice:"COHERENCE",state:(if $closed==12 then "SATISFIED" else "GAP" end),activity:"PreserveUnknownTrace"},
-     {id:"gooo.metric.workgraph.core-release-available.v2",class:"DRIVER",value:(if core_identity_ok then 1 else 0 end),total:1,target:1,unit:"releases",proof_choice:"FOUNDATION",state:(if core_identity_ok then "SATISFIED" else "GAP" end),activity:"ObserveCoreRelease"},
-     {id:"gooo.metric.workgraph.released-cli-receipts.v1",class:"DRIVER",value:([$cells[]|select((.id=="CORE_VERSION_SCHEMA_ADVERTISED" or .id=="CORE_CHECK_RECEIPT_OBSERVED") and .state=="CLOSED")]|length),total:2,target:2,unit:"receipts",proof_choice:"COHERENCE",state:(if version_ok and check_ok then "SATISFIED" else "GAP" end),activity:"ExecuteReleasedCheck"},
+     {id:"gooo.metric.workgraph.release-readiness.v3",class:"OUTCOME",value:$closed,total:12,target:12,unit:"tasks",proof_choice:"COHERENCE",state:(if $closed==12 then "SATISFIED" else "GAP" end),activity:"PreserveUnknownTrace"},
+     {id:"gooo.metric.workgraph.core-release-available.v3",class:"DRIVER",value:(if core_identity_ok then 1 else 0 end),total:1,target:1,unit:"releases",proof_choice:"FOUNDATION",state:(if core_identity_ok then "SATISFIED" else "GAP" end),activity:"ObserveCoreRelease"},
+     {id:"gooo.metric.workgraph.released-cli-receipts.v3",class:"DRIVER",value:([version_ok,syntax_check_ok,semantic_check_ok,graph_ok]|map(select(. == true))|length),total:4,target:4,unit:"receipts",proof_choice:"COHERENCE",state:(if version_ok and semantic_receipts_ok then "SATISFIED" else "GAP" end),activity:"ObserveReleasedSemanticReceipts"},
      {id:"gooo.metric.workgraph.predecessor-bindings.v1",class:"DRIVER",value:([$cells[]|select((.id=="INITIAL_REPORT_OBSERVED" or .id=="UNKNOWN_TRACE_PRESERVED") and .state=="CLOSED")]|length),total:2,target:2,unit:"bindings",proof_choice:"REGRESSION",state:(if predecessor_ok then "SATISFIED" else "GAP" end),activity:"PreserveUnknownTrace"},
-     {id:"gooo.metric.workgraph.unknown-prerequisites.v2",class:"GUARDRAIL",value:$unknown,total:12,target:0,unit:"tasks",proof_choice:"FOUNDATION",state:(if $unknown==0 then "SATISFIED" else "GAP" end),activity:"DeclareGoooAuthority"},
-     {id:"gooo.metric.workgraph.refuted-prerequisites.v2",class:"GUARDRAIL",value:$refuted,total:12,target:0,unit:"tasks",proof_choice:"COHERENCE",state:(if $refuted==0 then "SATISFIED" else "GAP" end),activity:"VersionWorkgraphContract"},
-     {id:"gooo.metric.workgraph.meta-binding.v2",class:"DRIVER",value:12,total:12,target:12,unit:"activities",proof_choice:"COHERENCE",state:"SATISFIED",activity:"PublishContractRFC"},
-     {id:"gooo.metric.workgraph.repository-writes.v2",class:"GUARDRAIL",value:$writes,total:1,target:0,unit:"writes",proof_choice:"REGRESSION",state:(if $writes==null then "UNKNOWN" elif $writes==0 then "SATISFIED" else "REFUTED" end),activity:"ObserveRepositoryWrites"}
+     {id:"gooo.metric.workgraph.unknown-prerequisites.v3",class:"GUARDRAIL",value:$unknown,total:12,target:0,unit:"tasks",proof_choice:"FOUNDATION",state:(if $unknown==0 then "SATISFIED" else "GAP" end),activity:"DeclareGoooAuthority"},
+     {id:"gooo.metric.workgraph.refuted-prerequisites.v3",class:"GUARDRAIL",value:$refuted,total:12,target:0,unit:"tasks",proof_choice:"COHERENCE",state:(if $refuted==0 then "SATISFIED" else "GAP" end),activity:"VersionWorkgraphContract"},
+     {id:"gooo.metric.workgraph.meta-binding.v3",class:"DRIVER",value:meta_binding_count,total:12,target:12,unit:"activities",proof_choice:"COHERENCE",state:(if meta_binding_count==12 then "SATISFIED" else "GAP" end),activity:"PublishContractRFC"},
+     {id:"gooo.metric.workgraph.repository-writes.v3",class:"GUARDRAIL",value:$writes,total:1,target:0,unit:"writes",proof_choice:"REGRESSION",state:(if $writes==null then "UNKNOWN" elif $writes==0 then "SATISFIED" else "REFUTED" end),activity:"ObserveRepositoryWrites"}
    ]} as $report |
    $report + {proofs:(["FOUNDATION","COHERENCE","REGRESSION"] | map(. as $p | {choice:$p,closed:([$cells[]|select(.proof_choice==$p and .state=="CLOSED")]|length),total:([$cells[]|select(.proof_choice==$p)]|length)}))}
   ' > "$tmp"

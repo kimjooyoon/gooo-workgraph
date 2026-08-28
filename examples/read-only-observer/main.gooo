@@ -1,5 +1,5 @@
 package workgraph
-namespace public_workgraph
+namespace publicworkgraph
 
 entity PublicRepository id "workgraph://entity/public-repository"
 entity GoooAuthority id "workgraph://entity/gooo-authority"
@@ -8,7 +8,7 @@ entity ContractRFC id "workgraph://entity/rfc"
 entity PinnedCoreRelease id "workgraph://entity/pinned-core-release"
 entity CoreBinaryLock id "workgraph://entity/core-binary-lock"
 entity VersionReceipt id "workgraph://entity/version-receipt"
-entity CheckReceipt id "workgraph://entity/check-receipt"
+entity SemanticReceiptSet id "workgraph://entity/semantic-receipt-set"
 entity SourceHeadBinding id "workgraph://entity/source-head-binding"
 entity RepositoryWriteObservation id "workgraph://entity/repository-write-observation"
 entity InitialWorkgraphReport id "workgraph://entity/initial-report"
@@ -22,8 +22,8 @@ activity PublishContractRFC(ContractRFC) -> ReadinessDecision
 activity ObserveCoreRelease(PinnedCoreRelease) -> ReadinessDecision
 activity LockCoreBinaryDigest(PinnedCoreRelease) -> CoreBinaryLock
 activity ExecuteReleasedVersion(CoreBinaryLock) -> VersionReceipt
-activity ExecuteReleasedCheck(VersionReceipt) -> CheckReceipt
-activity BindSourceHead(CheckReceipt) -> SourceHeadBinding
+activity ObserveReleasedSemanticReceipts(VersionReceipt) -> SemanticReceiptSet
+activity BindSourceHead(SemanticReceiptSet) -> SourceHeadBinding
 activity ObserveRepositoryWrites(SourceHeadBinding) -> RepositoryWriteObservation
 activity ObserveInitialReport(RepositoryWriteObservation) -> InitialWorkgraphReport
 activity PreserveUnknownTrace(InitialWorkgraphReport) -> UnknownTraceReceipt

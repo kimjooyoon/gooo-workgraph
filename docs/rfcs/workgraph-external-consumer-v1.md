@@ -1,6 +1,6 @@
 # RFC: Gooo Workgraph External Consumer Contract v1
 
-Status: Implemented for released-CLI readiness
+Status: Implemented for released-CLI semantic readiness
 
 ## Decision
 
@@ -39,9 +39,26 @@ first report digest and exact claim coordinates before INITIAL_REPORT_OBSERVED
 and UNKNOWN_TRACE_PRESERVED can close. The final state is 12/12 CLOSED,
 0 UNKNOWN, 0 REFUTED.
 
-The evaluator also proves two counterexamples: a private repository refutes
-PUBLIC_REPOSITORY, and a one-byte release digest contradiction refutes
-CORE_BINARY_DIGEST_LOCKED.
+The v3 denominator preserves those twelve task identities except for replacing
+the ambiguous syntax-only check task with
+`CORE_SEMANTIC_RECEIPTS_OBSERVED / ObserveReleasedSemanticReceipts`. The
+replacement does not increase the denominator. It requires four separate
+released CLI receipts: version, syntax check, explicit semantic check, and
+semantic graph.
+
+Default `check --json` proves syntax only. `check --semantic --json` proves
+that semantic lowering completed and exposes a semantic hash. `graph dump`
+provides the source digest, semantic IR digest, graph hash, and canonical
+activity nodes. No one receipt substitutes for another.
+
+The graph activity set must equal the twelve denominator activities exactly.
+This replaces source-text matching. Source spans and cross-format semantic
+equivalence are not claimed by this contract.
+
+The evaluator proves three counterexamples: a private repository refutes
+PUBLIC_REPOSITORY, a one-byte release digest contradiction refutes
+CORE_BINARY_DIGEST_LOCKED, and a missing released graph activity refutes
+CORE_SEMANTIC_RECEIPTS_OBSERVED at its exact compiler stage and step.
 
 ## Claim and incomplete knowledge
 
@@ -75,7 +92,7 @@ CORE_RELEASE_ASSET_SET_MISMATCH at RELEASE / LOCK_CORE_RELEASE_ASSET_SET.
 ## Human indicators
 
 The readiness report exposes exact numerators and denominators for 12 tasks,
-2 released-CLI receipts, 2 predecessor bindings, 12 Gooo activity bindings,
+4 released-CLI receipts, 2 predecessor bindings, 12 Gooo activity bindings,
 unknown and refuted tasks, and repository writes. It reports separate
 FOUNDATION, COHERENCE, and REGRESSION closure totals.
 
