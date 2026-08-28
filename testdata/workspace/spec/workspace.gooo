@@ -1,0 +1,5 @@
+package fixture
+namespace workspace
+
+entity Project id "fixture://project"
+activity Observe(Project) -> Project

@@ -1,0 +1,14 @@
+{
+  "schema": "gooo/core-release-lock/v3",
+  "repository": "kimjooyoon/meta-ontology-go",
+  "tag": "v0.3.0-dev",
+  "ref_type": "commit",
+  "tag_object_sha": "5b7af77549d88ba345550c1428323797e6ce1fd8",
+  "target_commit_sha": "5b7af77549d88ba345550c1428323797e6ce1fd8",
+  "asset": {
+    "id": 533579198,
+    "name": "gooo-linux-amd64.tar.gz",
+    "sha256": "505608f28ccc92ba191d590b3cac160be14955405c159f9dc7fb3c8826985a5e",
+    "size": 7036826
+  }
+}
