@@ -46,3 +46,17 @@ See the external consumer RFC in docs/rfcs/workgraph-external-consumer-v1.md.
 - This repository owns Workgraph contracts, release locks, evaluation,
   fixtures, and reports.
 - Either project can release without merging or importing the other project.
+
+## Workspace inventory vertical slice
+
+The additive workspace inventory experiment turns one local project tree into
+a deterministic, read-only report. It exposes nested directory and regular
+file totals, per-file language and physical line counts, aggregate Go and Gooo
+line counts, and an explicit root README policy. A root README is never a
+readiness prerequisite.
+
+The inventory is implemented as a Go 1.27 command, while its twelve acceptance
+cells are declared by Gooo activities in
+`examples/workspace-inventory/main.gooo`. CI binds those activities through
+the released semantic graph before accepting any metric. Missing roots remain
+typed UNKNOWN, invalid roots are REFUTED, and observation writes remain zero.

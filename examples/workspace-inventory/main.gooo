@@ -1,0 +1,29 @@
+package workgraph
+namespace workspaceinventory
+
+entity WorkspaceRoot id "workgraph://entity/workspace-root"
+entity DirectoryInventory id "workgraph://entity/directory-inventory"
+entity FileInventory id "workgraph://entity/file-inventory"
+entity GoFileInventory id "workgraph://entity/go-file-inventory"
+entity GoooFileInventory id "workgraph://entity/gooo-file-inventory"
+entity GoLineInventory id "workgraph://entity/go-line-inventory"
+entity GoooLineInventory id "workgraph://entity/gooo-line-inventory"
+entity RootReadmePolicy id "workgraph://entity/root-readme-policy"
+entity UnknownPathReceipt id "workgraph://entity/unknown-path-receipt"
+entity InvalidRootReceipt id "workgraph://entity/invalid-root-receipt"
+entity ReplayReceipt id "workgraph://entity/replay-receipt"
+entity RuntimeEnvelope id "workgraph://entity/runtime-envelope"
+entity InventoryDecision id "workgraph://entity/workspace-inventory-decision"
+
+activity ObserveWorkspaceRoot(WorkspaceRoot) -> InventoryDecision
+activity CountNestedDirectories(WorkspaceRoot) -> DirectoryInventory
+activity CountRegularFiles(WorkspaceRoot) -> FileInventory
+activity ClassifyGoFiles(FileInventory) -> GoFileInventory
+activity ClassifyGoooFiles(FileInventory) -> GoooFileInventory
+activity CountGoLines(GoFileInventory) -> GoLineInventory
+activity CountGoooLines(GoooFileInventory) -> GoooLineInventory
+activity ExcludeRootReadmeFromReadiness(WorkspaceRoot) -> RootReadmePolicy
+activity TraceUnknownWorkspacePath(WorkspaceRoot) -> UnknownPathReceipt
+activity RefuteInvalidWorkspaceRoot(WorkspaceRoot) -> InvalidRootReceipt
+activity ReplayWorkspaceInventory(FileInventory) -> ReplayReceipt
+activity ObserveWorkspaceResources(ReplayReceipt) -> RuntimeEnvelope

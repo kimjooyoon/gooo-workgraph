@@ -1,0 +1,285 @@
+name: Workspace inventory vertical slice
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-inventory-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  observation:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SUBJECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.SUBJECT_SHA }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.27.0
+          cache: false
+
+      - name: Conform Go 1.27 source and tests in CI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          stage=INITIALIZE
+          on_error() {
+            local status=$?
+            trap - ERR
+            set +e
+            printf '::error title=Go 1.27 conformance failed::stage=%s status=%s\n' "$stage" "$status"
+            git diff --stat
+            git diff -- go.mod cmd internal
+            if test -s "$RUNNER_TEMP/go-test.json"; then
+              jq -s '{failed:[.[]|select(.Action=="fail")|{package:.Package,test:.Test,output:.Output}],passed_tests:([.[]|select(.Action=="pass" and .Test!=null)]|length)}' "$RUNNER_TEMP/go-test.json"
+            fi
+            exit "$status"
+          }
+          trap on_error ERR
+
+          stage=VERIFY_GO_VERSION
+          test "$(go env GOVERSION)" = "go1.27.0"
+          before=$(git status --porcelain=v1 -z --untracked-files=all | sha256sum | awk '{print $1}')
+          stage=GO_MOD_TIDY
+          go mod tidy
+          stage=GO_FIX
+          go fix ./...
+          stage=GOFMT
+          gofmt -w cmd internal
+          after=$(git status --porcelain=v1 -z --untracked-files=all | sha256sum | awk '{print $1}')
+          stage=GO_TOOL_ZERO_WRITE
+          test "$before" = "$after"
+          stage=GO_VET
+          go vet ./...
+          stage=GO_TEST
+          go test -json ./... > "$RUNNER_TEMP/go-test.json"
+          ci_test_cases=$(jq -s '[.[]|select(.Action=="pass" and .Test!=null)]|length' "$RUNNER_TEMP/go-test.json")
+          stage=GO_TEST_CASE_COUNT
+          test "$ci_test_cases" = "3"
+          stage=GO_BUILD
+          go build -trimpath -o "$RUNNER_TEMP/gooo-workgraph" ./cmd/gooo-workgraph
+          stage=TOOLCHAIN_RECEIPT
+          jq -S -n \
+            --arg go_version "$(go env GOVERSION)" \
+            --argjson ci_test_cases "$ci_test_cases" \
+            '{schema:"gooo/workgraph-go-toolchain/v1",go_version:$go_version,
+              ci_test_cases:$ci_test_cases,go_fix_writes:0,local_tests_run:0}' \
+            > "$RUNNER_TEMP/toolchain.json"
+          stage=CLOSED
+          echo '::notice title=Go 1.27 conformance::fix, format, vet, build, and 3 CI tests closed'
+
+      - name: Download the immutable released Gooo compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock=contracts/core-release-lock-v3.json
+          repository=$(jq -r .repository "$lock")
+          tag=$(jq -r .tag "$lock")
+          expected_type=$(jq -r .ref_type "$lock")
+          expected_object=$(jq -r .tag_object_sha "$lock")
+          expected_target=$(jq -r .target_commit_sha "$lock")
+          ref=$(gh api "repos/$repository/git/ref/tags/$tag")
+          actual_type=$(jq -r .object.type <<<"$ref")
+          actual_object=$(jq -r .object.sha <<<"$ref")
+          test "$actual_type" = "$expected_type"
+          test "$actual_object" = "$expected_object"
+          test "$actual_object" = "$expected_target"
+
+          release=$(gh api "repos/$repository/releases/tags/$tag")
+          asset_id=$(jq -r .asset.id "$lock")
+          asset_name=$(jq -r .asset.name "$lock")
+          asset_size=$(jq -r .asset.size "$lock")
+          expected_digest=$(jq -r .asset.sha256 "$lock")
+          test "$(jq -r --arg name "$asset_name" '.assets[]|select(.name==$name)|.id' <<<"$release")" = "$asset_id"
+          test "$(jq -r --arg name "$asset_name" '.assets[]|select(.name==$name)|.size' <<<"$release")" = "$asset_size"
+
+          gh api -H 'Accept: application/octet-stream' "repos/$repository/releases/assets/$asset_id" > "$RUNNER_TEMP/gooo.tar.gz"
+          printf '%s  %s\n' "$expected_digest" "$RUNNER_TEMP/gooo.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/core"
+          tar -xzf "$RUNNER_TEMP/gooo.tar.gz" -C "$RUNNER_TEMP/core"
+          "$RUNNER_TEMP/core/gooo" version --json > "$RUNNER_TEMP/core-version.json"
+          jq -e '.schema_version=="gooo-version/v1"' "$RUNNER_TEMP/core-version.json" >/dev/null
+
+      - name: Bind all metrics to released Gooo semantic activities
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gooo="$RUNNER_TEMP/core/gooo"
+          source=examples/workspace-inventory/main.gooo
+          denominator=contracts/workspace-inventory-denominator-v1.json
+          stage=INITIALIZE
+          on_error() {
+            local status=$?
+            trap - ERR
+            set +e
+            printf '::error title=Gooo metric binding failed::stage=%s status=%s\n' "$stage" "$status"
+            for report in "$RUNNER_TEMP/workspace-syntax.json" "$RUNNER_TEMP/workspace-semantic.json" "$RUNNER_TEMP/workspace-graph.json"; do
+              if test -s "$report"; then
+                printf '%s\n' "--- $(basename "$report")"
+                jq -c '{schema_version,status,source_digest,graph_hash,diagnostics,activities:([.nodes[]?|select(.kind=="Activity")|.name])}' "$report" 2>/dev/null || cat "$report"
+              fi
+            done
+            exit "$status"
+          }
+          trap on_error ERR
+
+          stage=GOOO_SYNTAX
+          "$gooo" check --json "$source" > "$RUNNER_TEMP/workspace-syntax.json"
+          stage=GOOO_SEMANTICS
+          "$gooo" check --semantic --json "$source" > "$RUNNER_TEMP/workspace-semantic.json"
+          stage=GOOO_GRAPH
+          "$gooo" graph dump "$source" > "$RUNNER_TEMP/workspace-graph.json"
+          stage=GOOO_RECEIPT_STATUS
+          jq -e '.status=="ok"' "$RUNNER_TEMP/workspace-syntax.json" "$RUNNER_TEMP/workspace-semantic.json" >/dev/null
+          source_digest="$(sha256sum "$source" | awk '{print $1}')"
+          stage=GOOO_ACTIVITY_BINDING
+          jq -e --arg digest "$source_digest" --slurpfile denominator "$denominator" '
+            . as $graph |
+            .schema_version=="gooo-graph/v1" and .source_digest==$digest and
+            ([$graph.nodes[]|select(.kind=="Activity")]|length)==12 and
+            ([$denominator[0].cells[] as $cell |
+              select(([$graph.nodes[]|select(.kind=="Activity" and .name==$cell.activity)]|length)==1)
+            ]|length)==12
+          ' "$RUNNER_TEMP/workspace-graph.json" >/dev/null
+          stage=CLOSED
+          echo '::notice title=Gooo metric binding::12/12 released semantic activities observed'
+
+      - name: Observe closed, unknown, refuted, and replay cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          observer="$RUNNER_TEMP/gooo-workgraph"
+          before="$RUNNER_TEMP/repository-before.bin"
+          after="$RUNNER_TEMP/repository-after.bin"
+          git status --porcelain=v1 -z --untracked-files=all > "$before"
+
+          start_ns=$(date +%s%N)
+          /usr/bin/time -f '%M' -o "$RUNNER_TEMP/workspace-rss" \
+            "$observer" observe --root testdata/workspace --json > "$RUNNER_TEMP/workspace-complete.json"
+          end_ns=$(date +%s%N)
+          wall_ms=$(( (end_ns-start_ns)/1000000 ))
+          "$observer" observe --root testdata/workspace --json > "$RUNNER_TEMP/workspace-replay.json"
+          "$observer" observe --root testdata/missing-workspace --json > "$RUNNER_TEMP/workspace-unknown.json"
+          "$observer" observe --root go.mod --json > "$RUNNER_TEMP/workspace-refuted.json"
+
+          git status --porcelain=v1 -z --untracked-files=all > "$after"
+          if cmp -s "$before" "$after"; then repository_writes=0; else repository_writes=1; fi
+          ci_test_cases=$(jq -r .ci_test_cases "$RUNNER_TEMP/toolchain.json")
+          jq -S -n \
+            --arg go_version "$(go env GOVERSION)" \
+            --argjson peak_rss_kib "$(cat "$RUNNER_TEMP/workspace-rss")" \
+            --argjson wall_ms "$wall_ms" \
+            --argjson repository_writes "$repository_writes" \
+            --argjson ci_test_cases "$ci_test_cases" '
+            {schema:"gooo/workgraph-workspace-inventory-runtime/v1",go_version:$go_version,
+              peak_rss_kib:$peak_rss_kib,wall_ms:$wall_ms,repository_writes:$repository_writes,
+              go_fix_writes:0,ci_test_cases:$ci_test_cases,local_tests_run:0,
+              cross_project_required_gates:0}
+          ' > "$RUNNER_TEMP/workspace-runtime.json"
+
+      - name: Evaluate the fixed denominator and counterexamples
+        shell: bash
+        run: |
+          set -euo pipefail
+          evaluator=scripts/workspace-inventory-report.sh
+          args=(
+            "$RUNNER_TEMP/workspace-graph.json"
+            contracts/workspace-inventory-denominator-v1.json
+            "$RUNNER_TEMP/workspace-complete.json"
+            "$RUNNER_TEMP/workspace-replay.json"
+            "$RUNNER_TEMP/workspace-unknown.json"
+            "$RUNNER_TEMP/workspace-refuted.json"
+            "$RUNNER_TEMP/workspace-runtime.json"
+          )
+          bash "$evaluator" "${args[@]}" "$RUNNER_TEMP/workspace-report.json" "$SUBJECT_SHA"
+          bash "$evaluator" "${args[@]}" "$RUNNER_TEMP/workspace-report-replay.json" "$SUBJECT_SHA"
+          cmp -s "$RUNNER_TEMP/workspace-report.json" "$RUNNER_TEMP/workspace-report-replay.json"
+          jq -e '
+            .decision=="WORKSPACE_INVENTORY_VERTICAL_SLICE_OBSERVED" and
+            .summary.total_cells==12 and .summary.closed_cells==12 and
+            .summary.unknown_cells==0 and .summary.refuted_cells==0 and
+            .summary.directories==7 and .summary.files==5 and
+            .summary.go_files==2 and .summary.go_lines==6 and
+            .summary.gooo_files==2 and .summary.gooo_lines==8 and
+            .summary.root_readme_present==false and .summary.root_readme_required==false and
+            .summary.repository_writes==0 and .summary.local_tests_run==0 and
+            .summary.cross_project_required_gates==0 and
+            .scenarios=={closed:1,deterministic_replay:1,refuted:1,total:4,unknown:1} and
+            ([.proofs[]|select(.closed==4 and .total==4)]|length)==3 and
+            ([.indicator_classes[]|select(.closed==4 and .total==4)]|length)==3 and
+            .claim.next_operation=="PUBLISH_IMMUTABLE_WORKGRAPH_RELEASE"
+          ' "$RUNNER_TEMP/workspace-report.json" >/dev/null
+
+          jq '(.nodes)|=map(select(.name!="CountGoooLines"))' "$RUNNER_TEMP/workspace-graph.json" > "$RUNNER_TEMP/missing-meta-activity.json"
+          missing_meta_args=("$RUNNER_TEMP/missing-meta-activity.json" "${args[@]:1}")
+          if bash "$evaluator" "${missing_meta_args[@]}" "$RUNNER_TEMP/missing-meta-report.json" "$SUBJECT_SHA"; then
+            echo "missing Gooo activity was accepted" >&2
+            exit 1
+          fi
+
+          jq '.summary.gooo_lines=9' "$RUNNER_TEMP/workspace-complete.json" > "$RUNNER_TEMP/laundered-metric.json"
+          laundered_args=("${args[@]:0:2}" "$RUNNER_TEMP/laundered-metric.json" "${args[@]:3}")
+          if bash "$evaluator" "${laundered_args[@]}" "$RUNNER_TEMP/laundered-report.json" "$SUBJECT_SHA"; then
+            echo "laundered metric was accepted" >&2
+            exit 1
+          fi
+
+      - name: Publish exact human-readable workspace indicators
+        shell: bash
+        run: |
+          {
+            echo '## Gooo Workgraph workspace inventory'
+            echo
+            jq -r '
+              "- conformance cells: \(.summary.closed_cells)/\(.summary.total_cells) CLOSED",
+              "- nested directories: \(.summary.directories)",
+              "- regular files: \(.summary.files)",
+              "- Go: \(.summary.go_files) files / \(.summary.go_lines) physical lines",
+              "- Gooo: \(.summary.gooo_files) files / \(.summary.gooo_lines) physical lines",
+              "- root README present: \(.summary.root_readme_present)",
+              "- root README required: \(.summary.root_readme_required)",
+              "- scenarios: \(.scenarios.total)/\(.scenarios.total)",
+              "- repository writes: \(.summary.repository_writes)",
+              "- local tests: \(.summary.local_tests_run)",
+              "- cross-project required gates: \(.summary.cross_project_required_gates)",
+              (.indicators[]|select(.id=="gooo.metric.workgraph.peak-rss.v1")|"- peak RSS: \(.value) \(.unit)"),
+              (.indicators[]|select(.id=="gooo.metric.workgraph.wall-time.v1")|"- wall time: \(.value) \(.unit)")
+            ' "$RUNNER_TEMP/workspace-report.json"
+            echo
+            echo '### Per-file observations'
+            jq -r '.files[]|"- `\(.path)`: \(.language), \(.lines) physical lines"' "$RUNNER_TEMP/workspace-complete.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce zero source-repository writes
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: workspace-inventory-${{ env.SUBJECT_SHA }}
+          path: |
+            ${{ runner.temp }}/go-test.json
+            ${{ runner.temp }}/toolchain.json
+            ${{ runner.temp }}/core-version.json
+            ${{ runner.temp }}/workspace-syntax.json
+            ${{ runner.temp }}/workspace-semantic.json
+            ${{ runner.temp }}/workspace-graph.json
+            ${{ runner.temp }}/workspace-complete.json
+            ${{ runner.temp }}/workspace-replay.json
+            ${{ runner.temp }}/workspace-unknown.json
+            ${{ runner.temp }}/workspace-refuted.json
+            ${{ runner.temp }}/workspace-runtime.json
+            ${{ runner.temp }}/workspace-report.json
+            ${{ runner.temp }}/workspace-report-replay.json
+          if-no-files-found: warn

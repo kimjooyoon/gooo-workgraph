@@ -1,0 +1,3 @@
+package fixture
+namespace rules
+entity Rule id "fixture://rule"
