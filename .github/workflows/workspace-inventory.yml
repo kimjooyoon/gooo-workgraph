@@ -142,7 +142,7 @@ jobs:
           "$gooo" graph dump "$source" > "$RUNNER_TEMP/workspace-graph.json"
           stage=GOOO_RECEIPT_STATUS
           jq -e '.status=="ok"' "$RUNNER_TEMP/workspace-syntax.json" "$RUNNER_TEMP/workspace-semantic.json" >/dev/null
-          source_digest="sha256:$(sha256sum "$source" | awk '{print $1}')"
+          source_digest="$(sha256sum "$source" | awk '{print $1}')"
           stage=GOOO_ACTIVITY_BINDING
           jq -e --arg digest "$source_digest" --slurpfile denominator "$denominator" '
             . as $graph |
