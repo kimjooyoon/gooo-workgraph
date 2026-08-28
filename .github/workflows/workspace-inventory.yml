@@ -32,25 +32,51 @@ jobs:
       - name: Conform Go 1.27 source and tests in CI
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+          stage=INITIALIZE
+          on_error() {
+            local status=$?
+            trap - ERR
+            set +e
+            printf '::error title=Go 1.27 conformance failed::stage=%s status=%s\n' "$stage" "$status"
+            git diff --stat
+            git diff -- go.mod cmd internal
+            if test -s "$RUNNER_TEMP/go-test.json"; then
+              jq -s '{failed:[.[]|select(.Action=="fail")|{package:.Package,test:.Test,output:.Output}],passed_tests:([.[]|select(.Action=="pass" and .Test!=null)]|length)}' "$RUNNER_TEMP/go-test.json"
+            fi
+            exit "$status"
+          }
+          trap on_error ERR
+
+          stage=VERIFY_GO_VERSION
           test "$(go env GOVERSION)" = "go1.27.0"
           before=$(git status --porcelain=v1 -z --untracked-files=all | sha256sum | awk '{print $1}')
+          stage=GO_MOD_TIDY
           go mod tidy
+          stage=GO_FIX
           go fix ./...
+          stage=GOFMT
           gofmt -w cmd internal
           after=$(git status --porcelain=v1 -z --untracked-files=all | sha256sum | awk '{print $1}')
+          stage=GO_TOOL_ZERO_WRITE
           test "$before" = "$after"
+          stage=GO_VET
           go vet ./...
+          stage=GO_TEST
           go test -json ./... > "$RUNNER_TEMP/go-test.json"
           ci_test_cases=$(jq -s '[.[]|select(.Action=="pass" and .Test!=null)]|length' "$RUNNER_TEMP/go-test.json")
+          stage=GO_TEST_CASE_COUNT
           test "$ci_test_cases" = "3"
+          stage=GO_BUILD
           go build -trimpath -o "$RUNNER_TEMP/gooo-workgraph" ./cmd/gooo-workgraph
+          stage=TOOLCHAIN_RECEIPT
           jq -S -n \
             --arg go_version "$(go env GOVERSION)" \
             --argjson ci_test_cases "$ci_test_cases" \
             '{schema:"gooo/workgraph-go-toolchain/v1",go_version:$go_version,
               ci_test_cases:$ci_test_cases,go_fix_writes:0,local_tests_run:0}' \
             > "$RUNNER_TEMP/toolchain.json"
+          stage=CLOSED
           echo '::notice title=Go 1.27 conformance::fix, format, vet, build, and 3 CI tests closed'
 
       - name: Download the immutable released Gooo compiler
