@@ -22,18 +22,18 @@ type Subject struct {
 }
 
 type Summary struct {
-	Directories         int  `json:"directories"`
-	Files               int  `json:"files"`
-	GoFiles             int  `json:"go_files"`
-	GoooFiles           int  `json:"gooo_files"`
-	OtherFiles          int  `json:"other_files"`
-	GoLines             int  `json:"go_lines"`
-	GoooLines           int  `json:"gooo_lines"`
-	OtherLines          int  `json:"other_lines"`
-	TotalLines          int  `json:"total_lines"`
-	RootReadmePresent   bool `json:"root_readme_present"`
-	RootReadmeRequired  bool `json:"root_readme_required"`
-	RootReadmeExcluded  bool `json:"root_readme_excluded"`
+	Directories        int  `json:"directories"`
+	Files              int  `json:"files"`
+	GoFiles            int  `json:"go_files"`
+	GoooFiles          int  `json:"gooo_files"`
+	OtherFiles         int  `json:"other_files"`
+	GoLines            int  `json:"go_lines"`
+	GoooLines          int  `json:"gooo_lines"`
+	OtherLines         int  `json:"other_lines"`
+	TotalLines         int  `json:"total_lines"`
+	RootReadmePresent  bool `json:"root_readme_present"`
+	RootReadmeRequired bool `json:"root_readme_required"`
+	RootReadmeExcluded bool `json:"root_readme_excluded"`
 }
 
 type FileObservation struct {
@@ -54,10 +54,10 @@ type Claim struct {
 }
 
 type Authority struct {
-	Source                 string `json:"source"`
-	ObservationMode        string `json:"observation_mode"`
-	RepositoryWrites       int    `json:"repository_writes"`
-	RootReadmeReadiness    string `json:"root_readme_readiness"`
+	Source              string `json:"source"`
+	ObservationMode     string `json:"observation_mode"`
+	RepositoryWrites    int    `json:"repository_writes"`
+	RootReadmeReadiness string `json:"root_readme_readiness"`
 }
 
 type Report struct {
@@ -198,10 +198,10 @@ func unknown(report Report) Report {
 	report.Decision = "WORKSPACE_INVENTORY_UNKNOWN"
 	report.Claim = Claim{
 		State:         "UNKNOWN",
-		Stage:         stringPointer("INPUT"),
-		Step:          stringPointer("OBSERVE_WORKSPACE_ROOT"),
+		Stage:         new("INPUT"),
+		Step:          new("OBSERVE_WORKSPACE_ROOT"),
 		Reason:        "WORKSPACE_ROOT_NOT_FOUND",
-		UnknownClass:  stringPointer("DIRECT_MISSING"),
+		UnknownClass:  new("DIRECT_MISSING"),
 		NextOperation: "PROVIDE_WORKSPACE_ROOT",
 		BlockedBy:     []string{"workspace-root"},
 	}
@@ -212,8 +212,8 @@ func refuted(report Report, stage, step, reason, nextOperation string) Report {
 	report.Decision = "FAIL_CLOSED"
 	report.Claim = Claim{
 		State:         "REFUTED",
-		Stage:         stringPointer(stage),
-		Step:          stringPointer(step),
+		Stage:         new(stage),
+		Step:          new(step),
 		Reason:        reason,
 		NextOperation: nextOperation,
 		BlockedBy:     []string{"workspace-root"},
@@ -262,8 +262,4 @@ func countLines(path string) (int, error) {
 		lines++
 	}
 	return lines, nil
-}
-
-func stringPointer(value string) *string {
-	return &value
 }
