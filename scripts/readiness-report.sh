@@ -82,8 +82,7 @@ jq -n --slurpfile d "$denominator" --slurpfile repo "$repository_observation" --
      {id:"gooo.metric.workgraph.refuted-prerequisites.v1",class:"GUARDRAIL",value:$refuted,total:12,target:0,unit:"tasks",proof_choice:"COHERENCE",state:(if $refuted==0 then "SATISFIED" else "GAP" end),activity:"VersionWorkgraphContract"},
      {id:"gooo.metric.workgraph.meta-binding.v1",class:"DRIVER",value:12,total:12,target:12,unit:"activities",proof_choice:"COHERENCE",state:"SATISFIED",activity:"PublishContractRFC"},
      {id:"gooo.metric.workgraph.repository-writes.v1",class:"GUARDRAIL",value:null,total:1,target:0,unit:"writes",proof_choice:"REGRESSION",state:"UNKNOWN",activity:"ObserveRepositoryWrites"}
-   ],
-   proofs:["FOUNDATION","COHERENCE","REGRESSION"] | . as $report |
+   ]} as $report |
    $report + {proofs:(["FOUNDATION","COHERENCE","REGRESSION"] | map(. as $p | {choice:$p,closed:([$cells[]|select(.proof_choice==$p and .state=="CLOSED")]|length),total:([$cells[]|select(.proof_choice==$p)]|length)}))}
   ' > "$tmp"
 
