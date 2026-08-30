@@ -1,0 +1,297 @@
+name: Workgraph exact receipt selective CI work selection
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SUBJECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PRODUCER_REPOSITORY: kimjooyoon/gooo-evidence-generator
+      PRODUCER_TAG: v0.5.0-dev
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SUBJECT_SHA }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Bind subject and capture read-only repository snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
+          test "$(go version | awk '{print $3}')" = go1.27.0
+          work="$RUNNER_TEMP/selective-ci-work-selection"
+          mkdir -p "$work"
+          find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -print0 |
+            sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}' > "$work/repository-before"
+
+      - name: Acquire one released receipt and released Gooo toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/selective-ci-work-selection"
+          lock=contracts/test-receipt-reuse-release-lock-v1.json
+          release="$work/release"
+          corpus="$work/released"
+          toolchain="$work/toolchain"
+          mkdir -p "$release" "$corpus" "$toolchain"
+
+          producer_repository=$(jq -r .producer.repository "$lock")
+          producer_tag=$(jq -r .producer.tag "$lock")
+          release_id=$(jq -r .producer.release_id "$lock")
+          test "$producer_repository" = "$PRODUCER_REPOSITORY"
+          test "$producer_tag" = "$PRODUCER_TAG"
+          gh api "repos/$producer_repository/releases/$release_id" > "$release/producer-release.json"
+
+          bundle_id=$(jq -r .producer.bundle.id "$lock")
+          bundle_name=$(jq -r .producer.bundle.name "$lock")
+          bundle_size=$(jq -r .producer.bundle.size "$lock")
+          bundle_digest=$(jq -r .producer.bundle.digest "$lock")
+          checksum_id=$(jq -r .producer.checksums.id "$lock")
+          checksum_name=$(jq -r .producer.checksums.name "$lock")
+          checksum_size=$(jq -r .producer.checksums.size "$lock")
+          checksum_digest=$(jq -r .producer.checksums.digest "$lock")
+          jq -e --arg tag "$producer_tag" --argjson id "$release_id" \
+            '.id==$id and .tag_name==$tag and .draft==false and .prerelease==true' \
+            "$release/producer-release.json" >/dev/null
+          jq -e --arg name "$bundle_name" --arg digest "$bundle_digest" --argjson id "$bundle_id" --argjson size "$bundle_size" \
+            '[.assets[]|select(.name==$name and .id==$id and .size==$size and .digest==$digest)]|length==1' \
+            "$release/producer-release.json" >/dev/null
+          jq -e --arg name "$checksum_name" --arg digest "$checksum_digest" --argjson id "$checksum_id" --argjson size "$checksum_size" \
+            '[.assets[]|select(.name==$name and .id==$id and .size==$size and .digest==$digest)]|length==1' \
+            "$release/producer-release.json" >/dev/null
+          gh api -H 'Accept: application/octet-stream' "repos/$producer_repository/releases/assets/$bundle_id" > "$release/$bundle_name"
+          gh api -H 'Accept: application/octet-stream' "repos/$producer_repository/releases/assets/$checksum_id" > "$release/$checksum_name"
+          test "$(wc -c < "$release/$bundle_name" | tr -d ' ')" -eq "$bundle_size"
+          test "$(wc -c < "$release/$checksum_name" | tr -d ' ')" -eq "$checksum_size"
+          test "sha256:$(sha256sum "$release/$bundle_name" | awk '{print $1}')" = "$bundle_digest"
+          test "sha256:$(sha256sum "$release/$checksum_name" | awk '{print $1}')" = "$checksum_digest"
+          (cd "$release" && sha256sum -c "$checksum_name")
+          test "$(unzip -Z1 "$release/$bundle_name" | wc -l | tr -d ' ')" -eq 44
+          unzip -q "$release/$bundle_name" -d "$corpus"
+          test "$(find "$corpus" -type f | wc -l | tr -d ' ')" -eq 44
+          test -f "$corpus/baseline-test-receipt.json"
+          test -f "$corpus/baseline-test-result.json"
+
+          gooo_repository=$(jq -r .gooo.repository "$lock")
+          gooo_release_id=$(jq -r .gooo.release_id "$lock")
+          gooo_asset_id=$(jq -r .gooo.asset.id "$lock")
+          gooo_asset_name=$(jq -r .gooo.asset.name "$lock")
+          gooo_asset_size=$(jq -r .gooo.asset.size "$lock")
+          gooo_asset_digest=$(jq -r .gooo.asset.digest "$lock")
+          gh api "repos/$gooo_repository/releases/$gooo_release_id" > "$release/gooo-release.json"
+          jq -e --arg name "$gooo_asset_name" --arg digest "$gooo_asset_digest" --argjson id "$gooo_asset_id" --argjson size "$gooo_asset_size" \
+            '[.assets[]|select(.name==$name and .id==$id and .size==$size and .digest==$digest)]|length==1' \
+            "$release/gooo-release.json" >/dev/null
+          gh api -H 'Accept: application/octet-stream' "repos/$gooo_repository/releases/assets/$gooo_asset_id" > "$release/$gooo_asset_name"
+          test "$(wc -c < "$release/$gooo_asset_name" | tr -d ' ')" -eq "$gooo_asset_size"
+          test "sha256:$(sha256sum "$release/$gooo_asset_name" | awk '{print $1}')" = "$gooo_asset_digest"
+          tar -xzf "$release/$gooo_asset_name" -C "$toolchain"
+          chmod +x "$toolchain/gooo"
+          test "$(sha256sum "$toolchain/gooo" | awk '{print $1}')" = "$(jq -r .gooo.observed_binary_sha256 "$lock")"
+
+          jq -S -n --arg subject "$SUBJECT_SHA" --arg producer "$producer_repository" --arg tag "$producer_tag" \
+            --arg bundle "$bundle_name" --arg bundle_digest "$bundle_digest" --argjson bundle_files 44 \
+            --arg gooo "$gooo_repository" --arg gooo_asset "$gooo_asset_name" --arg gooo_digest "$gooo_asset_digest" \
+            '{schema:"gooo/workgraph/selective-ci-work-selection-acquisition/v1",subject_sha:$subject,
+              released_receipt:{repository:$producer,tag:$tag,bundle:$bundle,bundle_digest:$bundle_digest,files:$bundle_files,
+                receipt:"baseline-test-receipt.json",result:"baseline-test-result.json"},
+              released_gooo:{repository:$gooo,asset:$gooo_asset,asset_digest:$gooo_digest}}' > "$work/acquisition.json"
+
+      - name: Bind twelve released-Gooo meta activities
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/selective-ci-work-selection"
+          binary="$work/toolchain/gooo"
+          source=examples/selective-ci-work-selection/main.gooo
+          denominator=contracts/selective-ci-work-selection-denominator-v1.json
+          "$binary" version --json > "$work/version.json"
+          "$binary" check --semantic --json "$source" > "$work/semantic.json"
+          "$binary" graph dump "$source" > "$work/graph.json"
+          jq -e '.schema_version=="gooo-version/v1" and .language=="gooo" and .version=="0.2.0-dev"' "$work/version.json" >/dev/null
+          jq -e '.schema_version=="gooo/diagnostics/v1" and .command=="check" and .status=="ok" and .diagnostics==[] and .semantic_hash!=null' "$work/semantic.json" >/dev/null
+          activities=$(jq -c '[.cells[].activity]' "$denominator")
+          source_digest=$(sha256sum "$source" | awk '{print $1}')
+          semantic_hash=$(jq -r .semantic_hash "$work/semantic.json")
+          jq -e --arg source_digest "$source_digest" --arg semantic_hash "$semantic_hash" --argjson activities "$activities" \
+            '.schema_version=="gooo-graph/v1" and .source_digest==$source_digest and .ir.status=="available" and .ir.semantic_digest==$semantic_hash and
+             ([.nodes[]|select(.kind=="Activity")|.name]|sort)==($activities|sort) and ([.nodes[]|select(.kind=="Activity")]|length)==12' \
+            "$work/graph.json" >/dev/null
+          jq -S -n --arg source "$source" --arg source_digest "$source_digest" --arg semantic "$semantic_hash" --argjson activities "$activities" \
+            '{schema:"gooo/workgraph/selective-ci-activity-resolution/v1",source:{file:$source,source_digest:$source_digest,semantic_digest:$semantic},
+              summary:{expected:12,observed:12,closed:12,unknown:0,refuted:0,unique_selectors:12},
+              entries:[$activities[]|{activity:.,selector:{name:.},receipt:{decision:"CLOSED",occurrences:1,matches:[{name:.,subject:{source_digest:$source_digest,semantic_digest:$semantic}}]}}]}' \
+            > "$work/resolution.json"
+
+      - name: Construct current scope and deterministic CI work input
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/selective-ci-work-selection"
+          lock=contracts/test-receipt-reuse-release-lock-v1.json
+          source=examples/test-receipt-reuse/main.gooo
+          source_digest=$(sha256sum "$source" | awk '{print $1}')
+          test "$source_digest" = "$(jq -r .subject.sha256 "$lock")"
+          binary_digest=$(sha256sum "$work/toolchain/gooo" | awk '{print $1}')
+          test "$binary_digest" = "$(jq -r .gooo.observed_binary_sha256 "$lock")"
+          scope_id=$(jq -r .scope.id "$work/released/baseline-test-receipt.json")
+          scope=$(jq -S -n --arg id "$scope_id" --arg source "$source" --arg source_digest "$source_digest" \
+            --arg repository "$(jq -r .gooo.repository "$lock")" --arg tag "$(jq -r .gooo.tag "$lock")" \
+            --arg commit "$(jq -r .gooo.target_commit_sha "$lock")" --arg binary "$binary_digest" \
+            '{id:$id,files:[{path:$source,sha256:$source_digest}],toolchain:{repository:$repository,tag:$tag,target_commit_sha:$commit,binary_sha256:$binary,platform:"linux-amd64"},command:["gooo","check","--semantic","--json",$source]}')
+          jq -S -n --arg subject "$SUBJECT_SHA" --argjson scope "$scope" \
+            '{schema:"gooo/workgraph/selective-ci-work-selection-input/v1",subject_sha:$subject,current_scope:$scope,
+              tests:[{id:"released-gooo-semantic-test",required:true,scope:$scope,receipt_selector:"baseline-test-receipt.json"}]}' > "$work/selection-input.json"
+          jq -S -n --arg subject "$SUBJECT_SHA" \
+            '{schema:"gooo/workgraph/selective-ci-work-selection-runtime/v1",subject_sha:$subject,
+              executions:{consumer_test_executions:0,local_test_executions:0},
+              authority:{repository_writes:0,local_test_executions:0,consumer_test_executions:0,producer_source_checkout:0,sibling_checkout_reads:0},
+              toolchain:{go_required:"go1.27.0",selection_consumer:"released-gooo"}}' > "$work/runtime.json"
+
+      - name: Evaluate exact selection and required rerun cases without executing selected tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/selective-ci-work-selection"
+          lock=contracts/test-receipt-reuse-release-lock-v1.json
+          denominator=contracts/selective-ci-work-selection-denominator-v1.json
+          receipt="$work/released/baseline-test-receipt.json"
+          result="$work/released/baseline-test-result.json"
+          reports="$work/reports"
+          mkdir -p "$reports/scenarios"
+          zeros=$(printf '0%.0s' {1..64})
+          jq --arg digest "$zeros" '.current_scope.files[0].sha256=$digest | .tests[0].scope=.current_scope' \
+            "$work/selection-input.json" > "$reports/scenarios/changed-input.json"
+          jq --arg digest "$zeros" '.result.semantic_hash=$digest' "$receipt" > "$reports/scenarios/digest-valid-semantic-laundering.json"
+          jq --arg digest "$zeros" '.scope.files[0].sha256=$digest | del(.result.semantic_hash)' "$receipt" > "$reports/scenarios/mixed.json"
+          jq '.authority.repository_writes=1' "$receipt" > "$reports/scenarios/authority-escalation.json"
+
+          evaluate() {
+            local name=$1
+            local input=$2
+            local receipt_path=$3
+            local report_scenario=${4:-$1}
+            bash scripts/selective-ci-work-selection-report.sh "$GITHUB_WORKSPACE" "$input" "$lock" "$receipt_path" "$result" \
+              "$denominator" "$work/graph.json" "$work/resolution.json" "$work/runtime.json" "$reports/$name" "$SUBJECT_SHA" "$report_scenario"
+          }
+          evaluate exact-match-reuse "$work/selection-input.json" "$receipt"
+          evaluate exact-match-reuse-replay "$work/selection-input.json" "$receipt" exact-match-reuse
+          cmp -s "$reports/exact-match-reuse/report.json" "$reports/exact-match-reuse-replay/report.json"
+          cmp -s "$reports/exact-match-reuse/ci-work-selection.json" "$reports/exact-match-reuse-replay/ci-work-selection.json"
+          evaluate changed-input-rerun "$reports/scenarios/changed-input.json" "$receipt"
+          evaluate missing-receipt "$work/selection-input.json" "$work/released/missing-receipt.json"
+          evaluate digest-valid-semantic-laundering "$work/selection-input.json" "$reports/scenarios/digest-valid-semantic-laundering.json"
+          evaluate mixed "$work/selection-input.json" "$reports/scenarios/mixed.json"
+          evaluate authority-escalation "$work/selection-input.json" "$reports/scenarios/authority-escalation.json"
+          jq -S -n \
+            --slurpfile exact "$reports/exact-match-reuse/report.json" \
+            --slurpfile changed "$reports/changed-input-rerun/report.json" \
+            --slurpfile missing "$reports/missing-receipt/report.json" \
+            --slurpfile laundering "$reports/digest-valid-semantic-laundering/report.json" \
+            --slurpfile mixed "$reports/mixed/report.json" \
+            --slurpfile authority "$reports/authority-escalation/report.json" \
+            '[$exact[0],$changed[0],$missing[0],$laundering[0],$mixed[0],$authority[0]]' > "$work/cases.json"
+
+      - name: Stage raw selection evidence before assertions
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/selective-ci-work-selection"
+          artifact="$work/artifact"
+          mkdir -p "$artifact"
+          for file in "$work"/acquisition.json "$work"/selection-input.json "$work"/runtime.json "$work"/cases.json "$work"/version.json "$work"/semantic.json "$work"/graph.json "$work"/resolution.json; do
+            test -f "$file" && cp "$file" "$artifact/"
+          done
+          if test -d "$work/reports"; then cp -R "$work/reports" "$artifact/reports"; fi
+          if test -d "$work/released"; then
+            mkdir -p "$artifact/released"
+            for file in "$work"/released/baseline-test-receipt.json "$work"/released/baseline-test-result.json; do
+              test -f "$file" && cp "$file" "$artifact/released/"
+            done
+          fi
+          jq -S -n --arg subject "$SUBJECT_SHA" \
+            '{schema:"gooo/workgraph/selective-ci-work-selection-artifact/v1",subject_sha:$subject,
+              reports:["exact-match-reuse","exact-match-reuse-replay","changed-input-rerun","missing-receipt","digest-valid-semantic-laundering","mixed","authority-escalation"],
+              repository_writes:0,local_test_executions:0}' > "$artifact/artifact-metadata.json"
+
+      - name: Assert fixed denominator, exact selection, rerun safety, and typed metrics
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/selective-ci-work-selection"
+          jq -e '
+            length==6 and
+            all(.[];
+              .summary.total==12 and (.summary.closed+.summary.unknown+.summary.refuted)==12 and
+              ([.cells[]]|length)==12 and
+              all(.cells[]; has("stage") and has("step") and has("reason") and has("unknown_class") and has("next_operation") and has("blocked_by") and
+                (if .state=="UNKNOWN" then .stage!=null and .step!=null and .reason!=null and .unknown_class!=null and .next_operation!=null and .blocked_by!=null
+                 elif .state=="REFUTED" then .stage!=null and .step!=null and .reason!=null and .unknown_class==null and .next_operation!=null and .blocked_by!=null
+                 else true end)) and
+              all([.metrics.tests_planned,.metrics.tests_reused,.metrics.tests_required_to_execute,.metrics.producer_test_executions_observed,.metrics.consumer_test_executions,.metrics.saved_test_ms][]; type=="number" or .=="UNKNOWN") and
+              .meta_binding.activity_total==12 and .meta_binding.graph_verified and .meta_binding.resolution_verified and
+              (.summary.refuted==0 or .claim.state=="REFUTED")) and
+            (map(select(.scenario=="exact-match-reuse"))[0].decision=="SELECTIVE_CI_WORK_SELECTION_READY") and
+            (map(select(.scenario=="exact-match-reuse"))[0].selection.action=="REUSE") and
+            (map(select(.scenario=="exact-match-reuse"))[0].metrics=={consumer_test_executions:0,producer_test_executions_observed:1,saved_test_ms:"UNKNOWN",tests_planned:1,tests_required_to_execute:0,tests_reused:1}) and
+            (map(select(.scenario=="changed-input-rerun"))[0].selection.action=="RERUN_REQUIRED") and
+            (map(select(.scenario=="changed-input-rerun"))[0].selection.reason=="INPUT_TOOLCHAIN_OR_SCOPE_CHANGED") and
+            (map(select(.scenario=="changed-input-rerun"))[0].claim.state=="REFUTED") and
+            (map(select(.scenario=="changed-input-rerun"))[0].metrics.tests_required_to_execute==1) and
+            (map(select(.scenario=="missing-receipt"))[0].decision=="SELECTION_EVIDENCE_UNKNOWN") and
+            (map(select(.scenario=="missing-receipt"))[0].claim.state=="UNKNOWN") and
+            (map(select(.scenario=="missing-receipt"))[0].metrics.producer_test_executions_observed=="UNKNOWN") and
+            (map(select(.scenario=="digest-valid-semantic-laundering"))[0].selection.reason=="DIGEST_VALID_SEMANTIC_IDENTITY_MISMATCH") and
+            (map(select(.scenario=="digest-valid-semantic-laundering"))[0].claim.state=="REFUTED") and
+            (map(select(.scenario=="digest-valid-semantic-laundering"))[0].scopes.exact_match==true) and
+            (map(select(.scenario=="mixed"))[0].claim.state=="REFUTED") and
+            (map(select(.scenario=="mixed"))[0].summary.unknown>0) and
+            (map(select(.scenario=="mixed"))[0].summary.refuted>0) and
+            (map(select(.scenario=="authority-escalation"))[0].selection.reason=="TEST_RECEIPT_AUTHORITY_ESCALATED") and
+            (map(select(.scenario=="authority-escalation"))[0].claim.state=="REFUTED") and
+            (map(select(.scenario=="authority-escalation"))[0].authority.consumer_test_executions==0)
+          ' "$work/cases.json" >/dev/null
+          jq -e 'all(.[]; .authority.repository_writes==0 and .authority.local_test_executions==0 and .metrics.consumer_test_executions==0)' "$work/cases.json" >/dev/null
+
+      - name: Publish selection summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/selective-ci-work-selection"
+          {
+            echo '## Workgraph exact receipt selective CI work selection'
+            echo
+            jq -r '.[]|"- \(.scenario): \(.decision); action=\(.selection.action); planned=\(.metrics.tests_planned); reused=\(.metrics.tests_reused); required_to_execute=\(.metrics.tests_required_to_execute); producer_observed=\(.metrics.producer_test_executions_observed); consumer=\(.metrics.consumer_test_executions); saved_test_ms=\(.metrics.saved_test_ms)"' "$work/cases.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce zero Workgraph repository writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/selective-ci-work-selection"
+          find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -print0 |
+            sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}' > "$work/repository-after"
+          test "$(cat "$work/repository-before")" = "$(cat "$work/repository-after")"
+
+      - name: Upload selective-CI evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workgraph-selective-ci-work-selection-${{ env.SUBJECT_SHA }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/selective-ci-work-selection/artifact

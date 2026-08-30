@@ -1,0 +1,29 @@
+package selectiveciworkselection
+namespace selectiveciworkselection
+
+entity CurrentTestScope id "gooo://selective-ci-work-selection/entity/current-scope"
+entity ReleasedExactTestReceipt id "gooo://selective-ci-work-selection/entity/released-receipt"
+entity SelectiveCIActivities id "gooo://selective-ci-work-selection/entity/meta-activities"
+entity CIWorkPlan id "gooo://selective-ci-work-selection/entity/ci-work-plan"
+entity ReceiptSchema id "gooo://selective-ci-work-selection/entity/receipt-schema"
+entity ReceiptResultDigest id "gooo://selective-ci-work-selection/entity/result-digest"
+entity ReceiptSemanticIdentity id "gooo://selective-ci-work-selection/entity/semantic-identity"
+entity InputToolchainAndScope id "gooo://selective-ci-work-selection/entity/input-tool-scope"
+entity ReuseOrRerunSelection id "gooo://selective-ci-work-selection/entity/selection"
+entity SelectionUnknown id "gooo://selective-ci-work-selection/entity/unknown"
+entity SelectionRefutationPrecedence id "gooo://selective-ci-work-selection/entity/refutation"
+entity CIWorkSelection id "gooo://selective-ci-work-selection/entity/report"
+entity SelectiveCIWorkSelectionDecision id "gooo://selective-ci-work-selection/entity/decision"
+
+activity ObserveCurrentTestScope(CurrentTestScope) -> SelectiveCIWorkSelectionDecision
+activity ObserveReleasedExactTestReceipt(ReleasedExactTestReceipt) -> SelectiveCIWorkSelectionDecision
+activity BindSelectiveCIActivities(SelectiveCIActivities) -> SelectiveCIWorkSelectionDecision
+activity PlanCIWork(CIWorkPlan) -> SelectiveCIWorkSelectionDecision
+activity VerifyReceiptSchema(ReceiptSchema) -> SelectiveCIWorkSelectionDecision
+activity VerifyReceiptResultDigest(ReceiptResultDigest) -> SelectiveCIWorkSelectionDecision
+activity VerifyReceiptSemanticIdentity(ReceiptSemanticIdentity) -> SelectiveCIWorkSelectionDecision
+activity CompareInputToolchainAndScope(InputToolchainAndScope) -> SelectiveCIWorkSelectionDecision
+activity SelectReuseOrRerun(ReuseOrRerunSelection) -> SelectiveCIWorkSelectionDecision
+activity PreserveSelectionUnknown(SelectionUnknown) -> SelectiveCIWorkSelectionDecision
+activity EnforceRefutationPrecedence(SelectionRefutationPrecedence) -> SelectiveCIWorkSelectionDecision
+activity PublishCIWorkSelection(CIWorkSelection) -> SelectiveCIWorkSelectionDecision

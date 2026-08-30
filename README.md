@@ -98,3 +98,25 @@ external utility remain UNKNOWN; this evidence closes exactly one independent
 released receipt consumer.
 
 See [the test receipt reuse RFC](docs/rfcs/test-receipt-reuse-v1.md).
+
+## Exact receipt selective CI work selection
+
+The selective-CI workflow connects one released exact test receipt to an
+actual work-selection plan. It selects `REUSE` only when the current input,
+released toolchain, exact command, scope, result digest, and trusted semantic
+hash all match. Any changed input/toolchain/command/scope selects
+`RERUN_REQUIRED`; a missing receipt remains UNKNOWN evidence and takes the same
+safe rerun action.
+
+This is a separate consumer from the full receipt-corpus adoption above. Its
+contract has a fixed 12-cell denominator and exactly 12 released-Gooo-bound
+meta activities. The report keeps `tests_planned`, `tests_reused`,
+`tests_required_to_execute`, `producer_test_executions_observed`,
+`consumer_test_executions`, and `saved_test_ms` as integer-or-UNKNOWN values.
+`saved_test_ms` remains UNKNOWN without an exact before/after timing pair.
+
+CI covers exact-match reuse, changed-input rerun, missing-receipt UNKNOWN,
+digest-valid semantic laundering REFUTED, mixed REFUTED-over-UNKNOWN, and
+authority escalation REFUTED. The evaluator writes only to caller-owned temp
+output and asserts zero repository writes and zero local or consumer test
+executions. See [the selective-CI RFC](docs/rfcs/selective-ci-work-selection-v1.md).
