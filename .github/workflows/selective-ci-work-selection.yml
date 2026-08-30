@@ -243,7 +243,7 @@ jobs:
                 (if .state=="UNKNOWN" then .stage!=null and .step!=null and .reason!=null and .unknown_class!=null and .next_operation!=null and .blocked_by!=null
                  elif .state=="REFUTED" then .stage!=null and .step!=null and .reason!=null and .unknown_class==null and .next_operation!=null and .blocked_by!=null
                  else true end)) and
-              ([.metrics.tests_planned,.metrics.tests_reused,.metrics.tests_required_to_execute,.metrics.producer_test_executions_observed,.metrics.consumer_test_executions,.metrics.saved_test_ms][]|all(type=="number" or .=="UNKNOWN")) and
+              all([.metrics.tests_planned,.metrics.tests_reused,.metrics.tests_required_to_execute,.metrics.producer_test_executions_observed,.metrics.consumer_test_executions,.metrics.saved_test_ms][]; type=="number" or .=="UNKNOWN") and
               .meta_binding.activity_total==12 and .meta_binding.graph_verified and .meta_binding.resolution_verified and
               (.summary.refuted==0 or .claim.state=="REFUTED")) and
             (map(select(.scenario=="exact-match-reuse"))[0].decision=="SELECTIVE_CI_WORK_SELECTION_READY") and
