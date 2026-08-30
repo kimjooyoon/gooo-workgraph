@@ -1,0 +1,303 @@
+name: Workgraph transformation effect adoption
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adoption:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SUBJECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SUBJECT_SHA }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.27.0
+          cache: false
+
+      - name: Bind exact subject and read-only snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
+          snapshot() {
+            find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -print0 |
+              sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
+          }
+          snapshot > "$RUNNER_TEMP/repository-before"
+
+      - name: Acquire immutable core and transformation releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          adoption_lock=contracts/transformation-effect-adoption-release-lock-v1.json
+          core_lock=contracts/core-release-lock-v3.json
+
+          core_repository=$(jq -r .repository "$core_lock")
+          core_tag=$(jq -r .tag "$core_lock")
+          core_ref=$(gh api "repos/$core_repository/git/ref/tags/$core_tag")
+          test "$(jq -r .object.type <<<"$core_ref")" = "$(jq -r .ref_type "$core_lock")"
+          test "$(jq -r .object.sha <<<"$core_ref")" = "$(jq -r .tag_object_sha "$core_lock")"
+          core_release=$(gh api "repos/$core_repository/releases/tags/$core_tag")
+          core_asset_id=$(jq -r .asset.id "$core_lock")
+          core_asset_name=$(jq -r .asset.name "$core_lock")
+          core_asset_size=$(jq -r .asset.size "$core_lock")
+          core_asset_digest=$(jq -r .asset.sha256 "$core_lock")
+          jq -e --arg name "$core_asset_name" --argjson id "$core_asset_id" --argjson size "$core_asset_size" \
+            '.assets[]|select(.name==$name and .id==$id and .size==$size)' <<<"$core_release" >/dev/null
+          gh api -H 'Accept: application/octet-stream' "repos/$core_repository/releases/assets/$core_asset_id" > "$RUNNER_TEMP/gooo.tar.gz"
+          test "$(wc -c < "$RUNNER_TEMP/gooo.tar.gz"|tr -d ' ')" -eq "$core_asset_size"
+          test "$(sha256sum "$RUNNER_TEMP/gooo.tar.gz"|awk '{print $1}')" = "$core_asset_digest"
+          mkdir -p "$RUNNER_TEMP/core"
+          tar -xzf "$RUNNER_TEMP/gooo.tar.gz" -C "$RUNNER_TEMP/core"
+
+          producer_repository=$(jq -r .producer.repository "$adoption_lock")
+          producer_tag=$(jq -r .producer.tag "$adoption_lock")
+          producer_tag_object=$(jq -r .producer.tag_object_sha "$adoption_lock")
+          producer_target=$(jq -r .producer.target_commit_sha "$adoption_lock")
+          producer_release_id=$(jq -r .producer.release_id "$adoption_lock")
+          producer_ref=$(gh api "repos/$producer_repository/git/ref/tags/$producer_tag")
+          test "$(jq -r .object.type <<<"$producer_ref")" = tag
+          test "$(jq -r .object.sha <<<"$producer_ref")" = "$producer_tag_object"
+          producer_tag_json=$(gh api "repos/$producer_repository/git/tags/$producer_tag_object")
+          test "$(jq -r .object.type <<<"$producer_tag_json")" = commit
+          test "$(jq -r .object.sha <<<"$producer_tag_json")" = "$producer_target"
+          producer_release=$(gh api "repos/$producer_repository/releases/tags/$producer_tag")
+          jq -e --arg tag "$producer_tag" --argjson id "$producer_release_id" '.id==$id and .tag_name==$tag and .draft==false and .prerelease==true' <<<"$producer_release" >/dev/null
+
+          download_producer_asset() {
+            local selector=$1 destination=$2
+            local id name size digest
+            id=$(jq -r ".producer.$selector.id" "$adoption_lock")
+            name=$(jq -r ".producer.$selector.name" "$adoption_lock")
+            size=$(jq -r ".producer.$selector.size" "$adoption_lock")
+            digest=$(jq -r ".producer.$selector.digest" "$adoption_lock")
+            jq -e --arg name "$name" --arg digest "$digest" --argjson id "$id" --argjson size "$size" \
+              '.assets[]|select(.name==$name and .id==$id and .size==$size and .digest==$digest)' <<<"$producer_release" >/dev/null
+            gh api -H 'Accept: application/octet-stream' "repos/$producer_repository/releases/assets/$id" > "$destination"
+            test "$(wc -c < "$destination"|tr -d ' ')" -eq "$size"
+            test "sha256:$(sha256sum "$destination"|awk '{print $1}')" = "$digest"
+          }
+          download_producer_asset bundle "$RUNNER_TEMP/producer.zip"
+          download_producer_asset checksums "$RUNNER_TEMP/producer-SHA256SUMS"
+          producer_bundle_name=$(jq -r .producer.bundle.name "$adoption_lock")
+          test "$(sha256sum "$RUNNER_TEMP/producer.zip"|awk '{print $1}')" = "$(awk -v name="$producer_bundle_name" '$2==name {print $1}' "$RUNNER_TEMP/producer-SHA256SUMS")"
+          mkdir -p "$RUNNER_TEMP/producer"
+          unzip -q "$RUNNER_TEMP/producer.zip" -d "$RUNNER_TEMP/producer"
+          extracted_files=$(find "$RUNNER_TEMP/producer" -type f | wc -l | tr -d ' ')
+          test "$extracted_files" -eq 56
+          conformance_receipts=$(jq -s '[.[]|select(.decision=="CONFORMANT")]|length' "$RUNNER_TEMP/producer"/conform-*.json)
+          test "$conformance_receipts" -eq 5
+
+          jq -S -n \
+            --arg subject_sha "$SUBJECT_SHA" \
+            --arg core_lock_path "$core_lock" \
+            --arg core_schema "$(jq -r .schema "$core_lock")" \
+            --arg core_tag "$core_tag" \
+            --arg producer_repository "$producer_repository" \
+            --arg producer_tag "$producer_tag" \
+            --arg producer_tag_object "$producer_tag_object" \
+            --arg producer_target "$producer_target" \
+            --arg bundle_name "$producer_bundle_name" \
+            --arg bundle_digest "$(jq -r .producer.bundle.digest "$adoption_lock")" \
+            --arg checksum_digest "$(jq -r .producer.checksums.digest "$adoption_lock")" \
+            --argjson release_id "$producer_release_id" \
+            --argjson bundle_id "$(jq -r .producer.bundle.id "$adoption_lock")" \
+            --argjson bundle_size "$(jq -r .producer.bundle.size "$adoption_lock")" \
+            --argjson checksum_id "$(jq -r .producer.checksums.id "$adoption_lock")" \
+            --argjson extracted_files "$extracted_files" \
+            --argjson conformance_receipts "$conformance_receipts" '
+            {schema:"gooo/workgraph/transformation-effect-acquisition/v1",subject_sha:$subject_sha,
+              core:{release_verified:true,lock_path:$core_lock_path,schema:$core_schema,tag:$core_tag},
+              producer:{release_verified:true,repository:$producer_repository,tag:$producer_tag,
+                tag_object_sha:$producer_tag_object,target_commit_sha:$producer_target,release_id:$release_id,
+                bundle_verified:true,checksum_verified:true,
+                bundle:{id:$bundle_id,name:$bundle_name,size:$bundle_size,digest:$bundle_digest},
+                checksums:{id:$checksum_id,digest:$checksum_digest},extracted_files:$extracted_files,
+                conformance_receipts:$conformance_receipts},
+              authority:{producer_source_checkout:0,sibling_checkout_reads:0,network_requests:8}}
+          ' > "$RUNNER_TEMP/acquisition.json"
+
+      - name: Bind twelve Workgraph adoption activities
+        shell: bash
+        run: |
+          set -euo pipefail
+          gooo="$RUNNER_TEMP/core/gooo"
+          source=examples/transformation-effect-adoption/main.gooo
+          "$gooo" version --json > "$RUNNER_TEMP/version.json"
+          "$gooo" check --json "$source" > "$RUNNER_TEMP/syntax.json"
+          "$gooo" check --semantic --json "$source" > "$RUNNER_TEMP/semantic.json"
+          /usr/bin/time -f '%M' -o "$RUNNER_TEMP/graph-rss" "$gooo" graph dump "$source" > "$RUNNER_TEMP/graph.json"
+          jq -e '.schema_version=="gooo-version/v1" and .language=="gooo"' "$RUNNER_TEMP/version.json" >/dev/null
+          jq -e '.status=="ok"' "$RUNNER_TEMP/syntax.json" "$RUNNER_TEMP/semantic.json" >/dev/null
+          source_digest=$(sha256sum "$source"|awk '{print $1}')
+          jq -e --arg digest "$source_digest" --slurpfile denominator contracts/transformation-effect-adoption-denominator-v1.json '
+            .schema_version=="gooo-graph/v1" and .source_digest==$digest and
+            ([.nodes[]|select(.kind=="Activity")]|length)==12 and
+            ([$denominator[0].cells[] as $cell|select(( [.nodes[]|select(.kind=="Activity" and .name==$cell.activity)]|length)==1)]|length)==12
+          ' "$RUNNER_TEMP/graph.json" >/dev/null
+
+      - name: Evaluate independent adoption and counterexamples
+        shell: bash
+        run: |
+          set -euo pipefail
+          evaluator=scripts/transformation-effect-adoption-report.sh
+          denominator=contracts/transformation-effect-adoption-denominator-v1.json
+          common=("$GITHUB_WORKSPACE" "$RUNNER_TEMP/producer" "$RUNNER_TEMP/acquisition.json" "$RUNNER_TEMP/graph.json" "$denominator")
+
+          start_ns=$(date +%s%N)
+          /usr/bin/time -f '%M' -o "$RUNNER_TEMP/evaluator-rss" \
+            bash "$evaluator" "${common[@]}" "$RUNNER_TEMP/report-normal-a.json" "$SUBJECT_SHA" normal
+          end_ns=$(date +%s%N)
+          echo $(( (end_ns-start_ns+999999)/1000000 )) > "$RUNNER_TEMP/evaluator-wall-ms"
+          bash "$evaluator" "${common[@]}" "$RUNNER_TEMP/report-normal-b.json" "$SUBJECT_SHA" normal
+          cmp -s "$RUNNER_TEMP/report-normal-a.json" "$RUNNER_TEMP/report-normal-b.json"
+          jq -e '.decision=="WORKGRAPH_TRANSFORMATION_EFFECT_ADOPTED" and
+            .summary=={closed:12,dependency_blocked:0,direct_missing:0,refuted:0,total:12,unknown:0} and
+            .adoption.producer_release_assets==2 and .adoption.producer_release_asset_total==2 and
+            .adoption.release_artifact_files==56 and .adoption.release_artifact_file_total==56 and
+            .adoption.manifest_entries_verified==40 and .adoption.manifest_entry_total==40 and
+            .adoption.exact_fixture_pairs==1 and .adoption.exact_fixture_pair_total==1 and
+            .adoption.producer_unknown_cases==1 and .adoption.producer_refuted_cases==2 and
+            .adoption.refutation_precedence==1 and .adoption.gooo_meta_activities==12 and
+            .adoption.independent_public_consumers==1 and .adoption.independent_public_consumer_total==1 and
+            .utility.producer_independent_adoption_unknown_resolved=={observed:1,required:1,state:"CLOSED"} and
+            .utility.language_wide_generalization.state=="UNKNOWN" and .utility.external_user_utility.state=="UNKNOWN" and
+            .authority.repository_writes==0 and .authority.go_build_executions==0 and .authority.go_test_executions==0' "$RUNNER_TEMP/report-normal-a.json" >/dev/null
+
+          cp -a "$RUNNER_TEMP/producer" "$RUNNER_TEMP/case-missing"
+          rm "$RUNNER_TEMP/case-missing/missing-pattern/effect-receipt.json"
+          bash "$evaluator" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/case-missing" "$RUNNER_TEMP/acquisition.json" "$RUNNER_TEMP/graph.json" "$denominator" \
+            "$RUNNER_TEMP/report-missing.json" "$SUBJECT_SHA" missing-unknown
+          jq -e '.decision=="ADOPTION_EVIDENCE_UNKNOWN" and
+            .summary=={closed:9,dependency_blocked:2,direct_missing:1,refuted:0,total:12,unknown:3} and
+            .adoption.manifest_entries_verified==39 and .adoption.manifest_entries_missing==1 and
+            .claim.state=="UNKNOWN" and .claim.stage=="UNCERTAINTY" and
+            .claim.reason=="RELEASED_UNKNOWN_CAUSALITY_UNAVAILABLE" and .claim.unknown_class=="DIRECT_MISSING" and .claim.blocked_by==[]' "$RUNNER_TEMP/report-missing.json" >/dev/null
+
+          rebind_effect_manifest() {
+            directory=$1
+            digest=$(sha256sum "$directory/effect-receipt.json"|awk '{print $1}')
+            size=$(wc -c < "$directory/effect-receipt.json"|tr -d ' ')
+            jq --arg digest "$digest" --argjson size "$size" \
+              '(.files[]|select(.path=="effect-receipt.json")) |= (.sha256=$digest|.size_bytes=$size)' \
+              "$directory/manifest.json" > "$directory/manifest.tmp"
+            mv "$directory/manifest.tmp" "$directory/manifest.json"
+          }
+          cp -a "$RUNNER_TEMP/producer" "$RUNNER_TEMP/case-laundered"
+          for directory in normal-a normal-b; do
+            jq '.effect.delta.closed=2' "$RUNNER_TEMP/case-laundered/$directory/effect-receipt.json" > "$RUNNER_TEMP/case-laundered/$directory/effect.tmp"
+            mv "$RUNNER_TEMP/case-laundered/$directory/effect.tmp" "$RUNNER_TEMP/case-laundered/$directory/effect-receipt.json"
+            rebind_effect_manifest "$RUNNER_TEMP/case-laundered/$directory"
+          done
+          bash "$evaluator" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/case-laundered" "$RUNNER_TEMP/acquisition.json" "$RUNNER_TEMP/graph.json" "$denominator" \
+            "$RUNNER_TEMP/report-laundered.json" "$SUBJECT_SHA" laundered-effect
+          jq -e '.decision=="FAIL_CLOSED" and
+            .summary=={closed:9,dependency_blocked:0,direct_missing:0,refuted:3,total:12,unknown:0} and
+            .adoption.manifest_entries_verified==40 and .claim.state=="REFUTED" and
+            .claim.stage=="EFFECT" and .claim.reason=="EXACT_FIXTURE_EFFECT_MISMATCH"' "$RUNNER_TEMP/report-laundered.json" >/dev/null
+
+          cp -a "$RUNNER_TEMP/case-laundered" "$RUNNER_TEMP/case-mixed"
+          rm "$RUNNER_TEMP/case-mixed/missing-pattern/effect-receipt.json"
+          bash "$evaluator" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/case-mixed" "$RUNNER_TEMP/acquisition.json" "$RUNNER_TEMP/graph.json" "$denominator" \
+            "$RUNNER_TEMP/report-mixed.json" "$SUBJECT_SHA" refuted-over-unknown
+          jq -e '.decision=="FAIL_CLOSED" and
+            .summary=={closed:8,dependency_blocked:0,direct_missing:1,refuted:3,total:12,unknown:1} and
+            .adoption.manifest_entries_verified==39 and .adoption.manifest_entries_missing==1 and
+            .claim.state=="REFUTED" and .claim.stage=="EFFECT" and .claim.reason=="EXACT_FIXTURE_EFFECT_MISMATCH" and
+            ([.cells[]|select(.state=="UNKNOWN")]|length)==1' "$RUNNER_TEMP/report-mixed.json" >/dev/null
+
+          cp -a "$RUNNER_TEMP/producer" "$RUNNER_TEMP/case-authority"
+          jq '.repository.writes=1' "$RUNNER_TEMP/case-authority/runtime.json" > "$RUNNER_TEMP/case-authority/runtime.tmp"
+          mv "$RUNNER_TEMP/case-authority/runtime.tmp" "$RUNNER_TEMP/case-authority/runtime.json"
+          bash "$evaluator" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/case-authority" "$RUNNER_TEMP/acquisition.json" "$RUNNER_TEMP/graph.json" "$denominator" \
+            "$RUNNER_TEMP/report-authority.json" "$SUBJECT_SHA" authority-escalation
+          jq -e '.decision=="FAIL_CLOSED" and
+            .summary=={closed:9,dependency_blocked:0,direct_missing:0,refuted:3,total:12,unknown:0} and
+            .claim.state=="REFUTED" and .claim.stage=="AUTHORITY" and .claim.reason=="TRANSFORMATION_AUTHORITY_ESCALATED"' "$RUNNER_TEMP/report-authority.json" >/dev/null
+
+      - name: Record runtime inventory and exact artifact corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot() {
+            find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -print0 |
+              sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
+          }
+          before=$(cat "$RUNNER_TEMP/repository-before")
+          after=$(snapshot)
+          if test "$before" = "$after"; then writes=0; else writes=1; fi
+          jq -S -n \
+            --arg subject_sha "$SUBJECT_SHA" --arg go_version "$(go env GOVERSION)" --arg before "$before" --arg after "$after" \
+            --argjson writes "$writes" --argjson wall_ms "$(cat "$RUNNER_TEMP/evaluator-wall-ms")" \
+            --argjson peak_rss_kib "$(cat "$RUNNER_TEMP/evaluator-rss")" --argjson graph_peak_rss_kib "$(cat "$RUNNER_TEMP/graph-rss")" \
+            --slurpfile report "$RUNNER_TEMP/report-normal-a.json" '
+            {schema:"gooo/workgraph/transformation-effect-adoption-runtime/v1",subject_sha:$subject_sha,
+              toolchain:{go:$go_version,required:"go1.27.0",released_gooo_reuse:1,producer_conformance_receipts_reused:5,
+                workgraph_test_receipt_reuse:{state:"UNKNOWN",observed:0,required:1}},
+              executions:{gooo_version:1,gooo_syntax_check:1,gooo_semantic_check:1,gooo_graph:1,adoption_evaluator:6,
+                normal_report_replay_comparisons:1,go_build:0,go_test:0,product_build:0,product_test:0,local_test:0,go_fix:0,network_requests:8},
+              performance:{normal_evaluator_wall_ms:$wall_ms,normal_evaluator_peak_rss_kib:$peak_rss_kib,gooo_graph_peak_rss_kib:$graph_peak_rss_kib},
+              repository:{before_digest:$before,after_digest:$after,writes:$writes},inventory:$report[0].inventory,adoption:$report[0].adoption,
+              cases:{normal:1,unknown:1,refuted:3,normal_report_runs:2},
+              improvement:{independent_public_adoption:{state:"CLOSED",observed:1,required:1},language_wide_generalization:{state:"UNKNOWN",observed:0,required:1},
+                external_user_utility:{state:"UNKNOWN",observed:0,required:1},saved_build_ms:{state:"UNKNOWN",before:null,after:null},saved_test_ms:{state:"UNKNOWN",before:null,after:null}},
+              artifacts:{producer_files:56,workgraph_reports:6,acquisition_receipts:1,runtime_receipts:1,released_gooo_receipts:4,total:68}}
+          ' > "$RUNNER_TEMP/runtime.json"
+          jq -e '.toolchain.go=="go1.27.0" and .repository.writes==0 and .executions.go_build==0 and .executions.go_test==0 and
+            .executions.local_test==0 and .improvement.independent_public_adoption=={observed:1,required:1,state:"CLOSED"} and .artifacts.total==68' "$RUNNER_TEMP/runtime.json" >/dev/null
+          artifact_count=$(
+            find "$RUNNER_TEMP/producer" -type f
+            printf '%s\n' "$RUNNER_TEMP/report-normal-a.json" "$RUNNER_TEMP/report-normal-b.json" "$RUNNER_TEMP/report-missing.json" "$RUNNER_TEMP/report-laundered.json" "$RUNNER_TEMP/report-mixed.json" "$RUNNER_TEMP/report-authority.json" "$RUNNER_TEMP/acquisition.json" "$RUNNER_TEMP/runtime.json" "$RUNNER_TEMP/version.json" "$RUNNER_TEMP/syntax.json" "$RUNNER_TEMP/semantic.json" "$RUNNER_TEMP/graph.json"
+          )
+          test "$(printf '%s\n' "$artifact_count"|sed '/^$/d'|wc -l|tr -d ' ')" -eq 68
+
+          {
+            echo '## Workgraph transformation effect adoption'
+            jq -r '"- decision: \(.decision)","- cells: \(.summary.closed)/\(.summary.total) CLOSED; UNKNOWN \(.summary.unknown); REFUTED \(.summary.refuted)",
+              "- release files: \(.adoption.release_artifact_files)/\(.adoption.release_artifact_file_total)","- manifest entries: \(.adoption.manifest_entries_verified)/\(.adoption.manifest_entry_total)",
+              "- exact fixture pairs: \(.adoption.exact_fixture_pairs)/\(.adoption.exact_fixture_pair_total)",
+              "- producer cases: normal \(.adoption.producer_normal_cases); UNKNOWN \(.adoption.producer_unknown_cases); REFUTED \(.adoption.producer_refuted_cases)",
+              "- independent public consumers: \(.adoption.independent_public_consumers)/\(.adoption.independent_public_consumer_total)",
+              "- Gooo meta activities: \(.adoption.gooo_meta_activities)/\(.adoption.gooo_meta_activity_total)",
+              "- external user utility: \(.utility.external_user_utility.observed)/\(.utility.external_user_utility.required) \(.utility.external_user_utility.state)",
+              "- Go: \(.inventory.go.files) files / \(.inventory.go.lines) lines", "- Gooo: \(.inventory.gooo.files) files / \(.inventory.gooo.lines) lines",
+              "- files/directories: \(.inventory.repository_files)/\(.inventory.descendant_directories); root README \(.inventory.root_readme_policy)"' "$RUNNER_TEMP/report-normal-a.json"
+            jq -r '"- evaluator: \(.performance.normal_evaluator_wall_ms) ms / \(.performance.normal_evaluator_peak_rss_kib) KiB peak RSS",
+              "- repository writes/builds/tests/local tests: \(.repository.writes)/\(.executions.go_build)/\(.executions.go_test)/\(.executions.local_test)",
+              "- released producer conformance receipts reused: \(.toolchain.producer_conformance_receipts_reused)","- artifact files: \(.artifacts.total)"' "$RUNNER_TEMP/runtime.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce zero source-repository writes
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Upload exact adoption evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workgraph-transformation-effect-adoption-${{ env.SUBJECT_SHA }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/producer
+            ${{ runner.temp }}/report-normal-a.json
+            ${{ runner.temp }}/report-normal-b.json
+            ${{ runner.temp }}/report-missing.json
+            ${{ runner.temp }}/report-laundered.json
+            ${{ runner.temp }}/report-mixed.json
+            ${{ runner.temp }}/report-authority.json
+            ${{ runner.temp }}/acquisition.json
+            ${{ runner.temp }}/runtime.json
+            ${{ runner.temp }}/version.json
+            ${{ runner.temp }}/syntax.json
+            ${{ runner.temp }}/semantic.json
+            ${{ runner.temp }}/graph.json

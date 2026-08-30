@@ -1,0 +1,29 @@
+{
+  "schema": "gooo/workgraph/transformation-effect-adoption-release-lock/v1",
+  "producer": {
+    "repository": "kimjooyoon/gooo-evidence-generator",
+    "tag": "v0.4.0-dev",
+    "tag_object_sha": "82af4a42422c3651e6d1d27a262b8ee2392b5186",
+    "target_commit_sha": "c60dfed9c082d91b9b20e3f465b3a7f2c0f522a0",
+    "release_id": 379239457,
+    "prerelease": true,
+    "bundle": {
+      "id": 536426088,
+      "name": "gooo-evidence-generator-transformation-effect-v0.4.0-dev.zip",
+      "size": 53113,
+      "digest": "sha256:cd15f867b90615133a6bb2ea2eb31a2745e1c9a730c6a80d37c1a6ca2cb1331d",
+      "expected_files": 56
+    },
+    "checksums": {
+      "id": 536426089,
+      "name": "SHA256SUMS",
+      "size": 127,
+      "digest": "sha256:134c2f2509494a10d03a7567848dd43b645ff67815a8e4d40f7cfc088a65227c"
+    }
+  },
+  "core_lock": {
+    "path": "contracts/core-release-lock-v3.json",
+    "schema": "gooo/core-release-lock/v3",
+    "tag": "v0.3.0-dev"
+  }
+}

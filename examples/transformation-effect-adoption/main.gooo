@@ -1,0 +1,29 @@
+package transformationeffectadoption
+namespace transformationeffectadoption
+
+entity ReleasedTransformationProducer id "gooo://workgraph/transformation-adoption/entity/producer"
+entity ReleasedTransformationCore id "gooo://workgraph/transformation-adoption/entity/core"
+entity TransformationAdoptionActivities id "gooo://workgraph/transformation-adoption/entity/meta-activities"
+entity TransformationReleaseArtifact id "gooo://workgraph/transformation-adoption/entity/release-artifact"
+entity TransformationManifestCorpus id "gooo://workgraph/transformation-adoption/entity/manifests"
+entity ExactFixtureEffect id "gooo://workgraph/transformation-adoption/entity/exact-effect"
+entity AdoptedUnknownCausality id "gooo://workgraph/transformation-adoption/entity/unknown"
+entity AdoptedRefutationPrecedence id "gooo://workgraph/transformation-adoption/entity/refutation"
+entity AdoptedAuthorityBoundary id "gooo://workgraph/transformation-adoption/entity/authority"
+entity WorkgraphTransformationDecision id "gooo://workgraph/transformation-adoption/entity/decision"
+entity TransformationAdoptionReplay id "gooo://workgraph/transformation-adoption/entity/replay"
+entity TransformationEvidenceContradiction id "gooo://workgraph/transformation-adoption/entity/contradiction"
+entity TransformationAdoptionResult id "gooo://workgraph/transformation-adoption/entity/result"
+
+activity ObserveReleasedTransformationProducer(ReleasedTransformationProducer) -> TransformationAdoptionResult
+activity ObserveReleasedTransformationCore(ReleasedTransformationCore) -> TransformationAdoptionResult
+activity BindTransformationAdoptionActivities(TransformationAdoptionActivities) -> TransformationAdoptionResult
+activity VerifyTransformationReleaseArtifact(TransformationReleaseArtifact) -> TransformationAdoptionResult
+activity VerifyTransformationManifestCorpus(TransformationManifestCorpus) -> TransformationAdoptionResult
+activity AdoptExactFixtureEffect(ExactFixtureEffect) -> TransformationAdoptionResult
+activity PreserveAdoptedUnknownCausality(AdoptedUnknownCausality) -> TransformationAdoptionResult
+activity PreserveAdoptedRefutationPrecedence(AdoptedRefutationPrecedence) -> TransformationAdoptionResult
+activity PreserveAdoptedAuthorityBoundary(AdoptedAuthorityBoundary) -> TransformationAdoptionResult
+activity PublishWorkgraphTransformationDecision(WorkgraphTransformationDecision) -> TransformationAdoptionResult
+activity VerifyTransformationAdoptionReplay(TransformationAdoptionReplay) -> TransformationAdoptionResult
+activity RejectTransformationEvidenceContradiction(TransformationEvidenceContradiction) -> TransformationAdoptionResult
