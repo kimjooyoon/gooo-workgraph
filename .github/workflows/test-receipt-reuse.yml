@@ -214,11 +214,13 @@ jobs:
           jq -e '
             length==9 and
             all(.[]; .summary.total==12 and (.summary.closed+.summary.unknown+.summary.refuted)==12 and
-              ([.proofs[]|select(.closed==4 and .total==4)]|length)==3 and
-              ([.indicator_classes[]|select(.closed==4 and .total==4)]|length)==3 and
+              ([.proofs[]|select(.total==4)]|length)==3 and
+              ([.indicator_classes[]|select(.total==4)]|length)==3 and
               all(.cells[]; has("stage") and has("step") and has("reason") and has("unknown_class") and has("next_operation") and has("blocked_by")) and
               all(.cells[]; if .state=="UNKNOWN" then .stage!=null and .step!=null and .reason!=null and .unknown_class!=null and .next_operation!=null and .blocked_by!=null else true end)) and
             (map(select(.scenario=="normal"))[0].summary=={closed:12,direct_missing:0,dependency_blocked:0,refuted:0,total:12,unknown:0}) and
+            (map(select(.scenario=="normal"))[0].proofs|all(.[];.closed==4 and .total==4)) and
+            (map(select(.scenario=="normal"))[0].indicator_classes|all(.[];.closed==4 and .total==4)) and
             (map(select(.scenario=="missing-release"))[0].summary=={closed:0,direct_missing:1,dependency_blocked:11,refuted:0,total:12,unknown:12}) and
             (map(select(.scenario=="missing-receipt"))[0].summary=={closed:5,direct_missing:1,dependency_blocked:6,refuted:0,total:12,unknown:7}) and
             (map(select(.scenario=="stale-scope"))[0].summary=={closed:8,direct_missing:0,dependency_blocked:0,refuted:4,total:12,unknown:0}) and
