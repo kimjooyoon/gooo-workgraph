@@ -181,12 +181,12 @@ jobs:
           jq '.authority.repository_writes=1' "$receipt" > "$reports/scenarios/authority-escalation.json"
 
           evaluate() {
-            local name=$1 input=$2 receipt_path=$3
-            bash -x scripts/selective-ci-work-selection-report.sh "$GITHUB_WORKSPACE" "$input" "$lock" "$receipt_path" "$result" \
-              "$denominator" "$work/graph.json" "$work/resolution.json" "$work/runtime.json" "$reports/$name" "$SUBJECT_SHA" "$name"
+            local name=$1 input=$2 receipt_path=$3 report_scenario=${4:-$name}
+            bash scripts/selective-ci-work-selection-report.sh "$GITHUB_WORKSPACE" "$input" "$lock" "$receipt_path" "$result" \
+              "$denominator" "$work/graph.json" "$work/resolution.json" "$work/runtime.json" "$reports/$name" "$SUBJECT_SHA" "$report_scenario"
           }
           evaluate exact-match-reuse "$work/selection-input.json" "$receipt"
-          evaluate exact-match-reuse-replay "$work/selection-input.json" "$receipt"
+          evaluate exact-match-reuse-replay "$work/selection-input.json" "$receipt" exact-match-reuse
           cmp -s "$reports/exact-match-reuse/report.json" "$reports/exact-match-reuse-replay/report.json"
           cmp -s "$reports/exact-match-reuse/ci-work-selection.json" "$reports/exact-match-reuse-replay/ci-work-selection.json"
           evaluate changed-input-rerun "$reports/scenarios/changed-input.json" "$receipt"
