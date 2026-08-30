@@ -342,7 +342,7 @@ jobs:
             .scenarios==[$cases[0][].scenario] and (.files|length)>0
           ' "$work/manifest.json" >/dev/null
           test -f "$work/human-dossier.md"
-          rg -q 'evaluator_wall_ms|evaluator_peak_rss_kib|regular files|Go:|Gooo:' "$work/human-dossier.md"
+          grep -Eq 'evaluator_wall_ms|evaluator_peak_rss_kib|regular files|Go:|Gooo:' "$work/human-dossier.md"
           jq -e '.file_count==31 and .manifest=="manifest.json" and .human_dossier=="human-dossier.md" and .repository_writes==0 and .local_test_executions==0' "$work/artifact/artifact-metadata.json" >/dev/null
 
       - name: Publish selection summary
