@@ -181,6 +181,7 @@ jobs:
             "$RUNNER_TEMP/report-missing.json" "$SUBJECT_SHA" missing-unknown
           jq -e '.decision=="ADOPTION_EVIDENCE_UNKNOWN" and
             .summary=={closed:9,dependency_blocked:2,direct_missing:1,refuted:0,total:12,unknown:3} and
+            .adoption.manifest_entries_verified==39 and .adoption.manifest_entries_missing==1 and
             .claim.state=="UNKNOWN" and .claim.stage=="UNCERTAINTY" and
             .claim.reason=="RELEASED_UNKNOWN_CAUSALITY_UNAVAILABLE" and .claim.unknown_class=="DIRECT_MISSING" and .claim.blocked_by==[]' "$RUNNER_TEMP/report-missing.json" >/dev/null
 
@@ -212,6 +213,7 @@ jobs:
             "$RUNNER_TEMP/report-mixed.json" "$SUBJECT_SHA" refuted-over-unknown
           jq -e '.decision=="FAIL_CLOSED" and
             .summary=={closed:8,dependency_blocked:0,direct_missing:1,refuted:3,total:12,unknown:1} and
+            .adoption.manifest_entries_verified==39 and .adoption.manifest_entries_missing==1 and
             .claim.state=="REFUTED" and .claim.stage=="EFFECT" and .claim.reason=="EXACT_FIXTURE_EFFECT_MISMATCH" and
             ([.cells[]|select(.state=="UNKNOWN")]|length)==1' "$RUNNER_TEMP/report-mixed.json" >/dev/null
 

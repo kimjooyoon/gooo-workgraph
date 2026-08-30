@@ -86,7 +86,6 @@ assess_manifest() {
   done < <(jq -r '.files[]|[.path,.sha256,.size_bytes]|@tsv' "$manifest")
   actual=$(find "$directory" -maxdepth 1 -type f | wc -l | tr -d ' ')
   if test "$actual" -gt 9; then refuted=$((refuted+actual-9)); fi
-  if test "$actual" -lt 9; then missing=$((missing+9-actual)); fi
   if test "$refuted" -gt 0; then state=REFUTED
   elif test "$missing" -gt 0; then state=UNKNOWN
   else state=CLOSED
