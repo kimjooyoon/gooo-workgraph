@@ -68,3 +68,10 @@ The evaluator writes only to an empty caller-owned temporary directory. CI
 asserts `repository_writes=0`, `local_test_executions=0`, and
 `consumer_test_executions=0`. The changed-input and authority cases verify
 that a rerun is required without performing that rerun in this consumer job.
+
+The report links to a deterministic manifest and human dossier. Both preserve
+the integer evaluator `wall_ms` and `peak_rss_kib` observations and the
+root-README-excluded inventory of regular files, descendant directories,
+physical lines, Go files/lines, and Gooo files/lines. These observations are
+not quality scores or improvement claims; `saved_test_ms` remains `UNKNOWN`
+without an exact before/after timing pair.

@@ -120,3 +120,9 @@ digest-valid semantic laundering REFUTED, mixed REFUTED-over-UNKNOWN, and
 authority escalation REFUTED. The evaluator writes only to caller-owned temp
 output and asserts zero repository writes and zero local or consumer test
 executions. See [the selective-CI RFC](docs/rfcs/selective-ci-work-selection-v1.md).
+
+The same report is linked to a deterministic manifest and human dossier. CI
+records evaluator `wall_ms` and `peak_rss_kib`, plus root-README-excluded
+regular-file, descendant-directory, physical-line, Go, and Gooo inventory.
+These are observations only; they are not quality scores or improvement
+claims.

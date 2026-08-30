@@ -160,7 +160,7 @@ jobs:
             '{schema:"gooo/workgraph/selective-ci-work-selection-runtime/v1",subject_sha:$subject,
               executions:{consumer_test_executions:0,local_test_executions:0},
               authority:{repository_writes:0,local_test_executions:0,consumer_test_executions:0,producer_source_checkout:0,sibling_checkout_reads:0},
-              toolchain:{go_required:"go1.27.0",selection_consumer:"released-gooo"}}' > "$work/runtime.json"
+              toolchain:{go_required:"go1.27.0",selection_consumer:"released-gooo"}}' > "$work/runtime-base.json"
 
       - name: Evaluate exact selection and required rerun cases without executing selected tests
         shell: bash
@@ -179,6 +179,34 @@ jobs:
           jq --arg digest "$zeros" '.result.semantic_hash=$digest' "$receipt" > "$reports/scenarios/digest-valid-semantic-laundering.json"
           jq --arg digest "$zeros" '.scope.files[0].sha256=$digest | del(.result.semantic_hash)' "$receipt" > "$reports/scenarios/mixed.json"
           jq '.authority.repository_writes=1' "$receipt" > "$reports/scenarios/authority-escalation.json"
+
+          start_ns=$(date +%s%N)
+          /usr/bin/time -v -o "$work/evaluator-time.txt" bash scripts/selective-ci-work-selection-report.sh \
+            "$GITHUB_WORKSPACE" "$work/selection-input.json" "$lock" "$receipt" "$result" "$denominator" \
+            "$work/graph.json" "$work/resolution.json" "$work/runtime-base.json" "$work/measurement" "$SUBJECT_SHA" exact-match-reuse
+          end_ns=$(date +%s%N)
+          wall_ms=$(( (end_ns-start_ns+999999)/1000000 ))
+          peak_rss_kib=$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$work/evaluator-time.txt")
+          test "$wall_ms" -gt 0
+          test -n "$peak_rss_kib"
+
+          regular_files=$(find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f ! -path "$GITHUB_WORKSPACE/README.md" -print | wc -l | tr -d ' ')
+          descendant_directories=$(find "$GITHUB_WORKSPACE" -mindepth 1 -type d ! -path "$GITHUB_WORKSPACE/.git" ! -path "$GITHUB_WORKSPACE/.git/*" -print | wc -l | tr -d ' ')
+          physical_lines=$(find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f ! -path "$GITHUB_WORKSPACE/README.md" -print0 | sort -z | xargs -0 cat | wc -l | tr -d ' ')
+          go_files=$(find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -name '*.go' -print | wc -l | tr -d ' ')
+          go_lines=$(find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -name '*.go' -print0 | sort -z | xargs -0 cat | wc -l | tr -d ' ')
+          gooo_files=$(find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -name '*.gooo' -print | wc -l | tr -d ' ')
+          gooo_lines=$(find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -name '*.gooo' -print0 | sort -z | xargs -0 cat | wc -l | tr -d ' ')
+          jq -S -n --arg subject "$SUBJECT_SHA" --argjson wall_ms "$wall_ms" --argjson peak_rss_kib "$peak_rss_kib" \
+            --argjson regular_files "$regular_files" --argjson descendant_directories "$descendant_directories" \
+            --argjson physical_lines "$physical_lines" --argjson go_files "$go_files" --argjson go_lines "$go_lines" \
+            --argjson gooo_files "$gooo_files" --argjson gooo_lines "$gooo_lines" \
+            '{schema:"gooo/workgraph/selective-ci-work-selection-runtime/v1",subject_sha:$subject,
+              executions:{consumer_test_executions:0,local_test_executions:0},
+              authority:{repository_writes:0,local_test_executions:0,consumer_test_executions:0,producer_source_checkout:0,sibling_checkout_reads:0},
+              toolchain:{go_required:"go1.27.0",selection_consumer:"released-gooo"},
+              performance:{evaluator_wall_ms:$wall_ms,evaluator_peak_rss_kib:$peak_rss_kib},
+              inventory:{root_readme_policy:"EXCLUDED",regular_files:$regular_files,descendant_directories:$descendant_directories,physical_lines:$physical_lines,go:{files:$go_files,lines:$go_lines},gooo:{files:$gooo_files,lines:$gooo_lines}}}' > "$work/runtime.json"
 
           evaluate() {
             local name=$1
@@ -206,6 +234,40 @@ jobs:
             --slurpfile authority "$reports/authority-escalation/report.json" \
             '[$exact[0],$changed[0],$missing[0],$laundering[0],$mixed[0],$authority[0]]' > "$work/cases.json"
 
+          manifest_entries=$(
+            find "$reports" -type f -print0 | sort -z |
+              while IFS= read -r -d '' file; do
+                relative=${file#"$work/"}
+                jq -cn --arg path "$relative" --arg sha256 "$(sha256sum "$file" | awk '{print $1}')" \
+                  --argjson size_bytes "$(wc -c < "$file" | tr -d ' ')" \
+                  '{path:$path,sha256:$sha256,size_bytes:$size_bytes}'
+              done | jq -s .
+          )
+          jq -S -n --arg subject "$SUBJECT_SHA" --arg report "reports/exact-match-reuse/report.json" \
+            --arg work_selection "reports/exact-match-reuse/ci-work-selection.json" --arg dossier "human-dossier.md" \
+            --argjson files "$manifest_entries" --slurpfile exact "$reports/exact-match-reuse/report.json" \
+            --slurpfile cases "$work/cases.json" \
+            '{schema:"gooo/workgraph/selective-ci-work-selection-manifest/v1",subject_sha:$subject,
+              report:$report,work_selection:$work_selection,human_dossier:$dossier,
+              performance:$exact[0].performance,inventory:$exact[0].inventory,
+              scenarios:[$cases[0][].scenario],files:$files}' > "$work/manifest.json"
+          {
+            echo '# Selective CI exact receipt work-selection dossier'
+            echo
+            jq -r '"- report: reports/exact-match-reuse/report.json",
+              "- manifest: manifest.json",
+              "- decision: \(.decision)",
+              "- selection: \(.selection.action)",
+              "- evaluator_wall_ms: \(.performance.evaluator_wall_ms)",
+              "- evaluator_peak_rss_kib: \(.performance.evaluator_peak_rss_kib)",
+              "- inventory: \(.inventory.regular_files) regular files; \(.inventory.descendant_directories) descendant directories; \(.inventory.physical_lines) physical lines",
+              "- Go: \(.inventory.go.files) files / \(.inventory.go.lines) lines; Gooo: \(.inventory.gooo.files) files / \(.inventory.gooo.lines) lines",
+              "- root README policy: \(.inventory.root_readme_policy)"' "$reports/exact-match-reuse/report.json"
+            echo
+            echo '## Cases'
+            jq -r '.[]|"- \(.scenario): \(.summary.closed) CLOSED / \(.summary.unknown) UNKNOWN / \(.summary.refuted) REFUTED; action=\(.selection.action)"' "$work/cases.json"
+          } > "$work/human-dossier.md"
+
       - name: Stage raw selection evidence before assertions
         if: always()
         shell: bash
@@ -214,7 +276,7 @@ jobs:
           work="$RUNNER_TEMP/selective-ci-work-selection"
           artifact="$work/artifact"
           mkdir -p "$artifact"
-          for file in "$work"/acquisition.json "$work"/selection-input.json "$work"/runtime.json "$work"/cases.json "$work"/version.json "$work"/semantic.json "$work"/graph.json "$work"/resolution.json; do
+          for file in "$work"/acquisition.json "$work"/selection-input.json "$work"/runtime.json "$work"/cases.json "$work"/manifest.json "$work"/human-dossier.md "$work"/version.json "$work"/semantic.json "$work"/graph.json "$work"/resolution.json; do
             test -f "$file" && cp "$file" "$artifact/"
           done
           if test -d "$work/reports"; then cp -R "$work/reports" "$artifact/reports"; fi
@@ -224,9 +286,11 @@ jobs:
               test -f "$file" && cp "$file" "$artifact/released/"
             done
           fi
-          jq -S -n --arg subject "$SUBJECT_SHA" \
+          artifact_file_count=$(( $(find "$artifact" -type f | wc -l | tr -d ' ') + 1 ))
+          jq -S -n --arg subject "$SUBJECT_SHA" --argjson file_count "$artifact_file_count" \
             '{schema:"gooo/workgraph/selective-ci-work-selection-artifact/v1",subject_sha:$subject,
               reports:["exact-match-reuse","exact-match-reuse-replay","changed-input-rerun","missing-receipt","digest-valid-semantic-laundering","mixed","authority-escalation"],
+              manifest:"manifest.json",human_dossier:"human-dossier.md",file_count:$file_count,
               repository_writes:0,local_test_executions:0}' > "$artifact/artifact-metadata.json"
 
       - name: Assert fixed denominator, exact selection, rerun safety, and typed metrics
@@ -244,6 +308,9 @@ jobs:
                  elif .state=="REFUTED" then .stage!=null and .step!=null and .reason!=null and .unknown_class==null and .next_operation!=null and .blocked_by!=null
                  else true end)) and
               all([.metrics.tests_planned,.metrics.tests_reused,.metrics.tests_required_to_execute,.metrics.producer_test_executions_observed,.metrics.consumer_test_executions,.metrics.saved_test_ms][]; type=="number" or .=="UNKNOWN") and
+              (.performance.evaluator_wall_ms|type)=="number" and (.performance.evaluator_peak_rss_kib|type)=="number" and
+              .inventory.root_readme_policy=="EXCLUDED" and
+              all([.inventory.regular_files,.inventory.descendant_directories,.inventory.physical_lines,.inventory.go.files,.inventory.go.lines,.inventory.gooo.files,.inventory.gooo.lines][]; type=="number") and
               .meta_binding.activity_total==12 and .meta_binding.graph_verified and .meta_binding.resolution_verified and
               (.summary.refuted==0 or .claim.state=="REFUTED")) and
             (map(select(.scenario=="exact-match-reuse"))[0].decision=="SELECTIVE_CI_WORK_SELECTION_READY") and
@@ -267,6 +334,16 @@ jobs:
             (map(select(.scenario=="authority-escalation"))[0].authority.consumer_test_executions==0)
           ' "$work/cases.json" >/dev/null
           jq -e 'all(.[]; .authority.repository_writes==0 and .authority.local_test_executions==0 and .metrics.consumer_test_executions==0)' "$work/cases.json" >/dev/null
+          jq -e --slurpfile exact "$work/reports/exact-match-reuse/report.json" --slurpfile cases "$work/cases.json" '
+            .schema=="gooo/workgraph/selective-ci-work-selection-manifest/v1" and
+            .subject_sha==$exact[0].subject_sha and .report=="reports/exact-match-reuse/report.json" and
+            .work_selection=="reports/exact-match-reuse/ci-work-selection.json" and .human_dossier=="human-dossier.md" and
+            .performance==$exact[0].performance and .inventory==$exact[0].inventory and
+            .scenarios==[$cases[0][].scenario] and (.files|length)>0
+          ' "$work/manifest.json" >/dev/null
+          test -f "$work/human-dossier.md"
+          grep -Eq 'evaluator_wall_ms|evaluator_peak_rss_kib|regular files|Go:|Gooo:' "$work/human-dossier.md"
+          jq -e '.file_count==31 and .manifest=="manifest.json" and .human_dossier=="human-dossier.md" and .repository_writes==0 and .local_test_executions==0' "$work/artifact/artifact-metadata.json" >/dev/null
 
       - name: Publish selection summary
         shell: bash
