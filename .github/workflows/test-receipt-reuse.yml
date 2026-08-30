@@ -201,6 +201,27 @@ jobs:
           evaluate unrecognized-fixed-point "$work/acquisition.json"
           cp "$reports/normal.json" "$reports/normal-replay.json"
           cmp -s "$reports/normal.json" "$reports/normal-replay.json"
+          jq -s -S '.' "$reports/normal.json" "$reports/missing-release.json" "$reports/missing-receipt.json" \
+            "$reports/stale-scope.json" "$reports/stale-blob.json" "$reports/result-contradiction.json" \
+            "$reports/refuted-over-unknown.json" "$reports/authority-escalation.json" "$reports/unrecognized-fixed-point.json" > "$work/cases.json"
+
+      - name: Stage raw reports before assertions
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/test-receipt-reuse"
+          artifact="$work/artifact"
+          mkdir -p "$artifact"
+          if test -d "$work/corpus" && test ! -d "$artifact/release-corpus"; then cp -R "$work/corpus" "$artifact/release-corpus"; fi
+          if test -d "$work/reports"; then
+            mkdir -p "$artifact/reports"
+            for file in "$work"/reports/*; do test -f "$file" && cp "$file" "$artifact/reports/"; done
+          fi
+          for file in "$work"/acquisition*.json "$work"/runtime.json "$work"/cases.json; do
+            test -f "$file" && cp "$file" "$artifact/"
+          done
+          if test -d "$work/release" && test ! -d "$artifact/release-metadata"; then cp -R "$work/release" "$artifact/release-metadata"; fi
 
       - name: Assert case denominators, precedence, and human indicators
         shell: bash
@@ -208,9 +229,18 @@ jobs:
           set -euo pipefail
           work="$RUNNER_TEMP/test-receipt-reuse"
           reports="$work/reports"
-          jq -s -S '.' "$reports/normal.json" "$reports/missing-release.json" "$reports/missing-receipt.json" \
-            "$reports/stale-scope.json" "$reports/stale-blob.json" "$reports/result-contradiction.json" \
-            "$reports/refuted-over-unknown.json" "$reports/authority-escalation.json" "$reports/unrecognized-fixed-point.json" > "$work/cases.json"
+          echo 'Observed case reports:'
+          if test -f "$work/cases.json"; then
+            jq -r '.[]|[.scenario,.summary.closed,.summary.unknown,.summary.refuted,.claim.state,.claim.reason,.claim.unknown_class]|@tsv' "$work/cases.json"
+          else
+            echo 'cases.json missing'
+          fi
+          echo 'Observed normal reuse signals:'
+          if test -f "$reports/normal.json"; then
+            jq -r '[.adoption.independent_released_receipt_consumers,.adoption.released_receipt_reuses,.execution.producer_test,.execution.consumer_test,.source.immutable_api_reads]|@tsv' "$reports/normal.json"
+          else
+            echo 'normal.json missing'
+          fi
           jq -e '
             length==9 and
             all(.[]; .summary.total==12 and (.summary.closed+.summary.unknown+.summary.refuted)==12 and
@@ -268,17 +298,22 @@ jobs:
           test "$(cat "$work/repository-before")" = "$(cat "$work/repository-after")"
 
       - name: Prepare exact evidence artifact
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/test-receipt-reuse"
           artifact="$work/artifact"
           mkdir -p "$artifact"
-          cp -R "$work/corpus" "$artifact/release-corpus"
-          cp -R "$work/reports" "$artifact/reports"
-          cp "$work/acquisition.json" "$work/acquisition-missing-release.json" "$work/acquisition-stale-blob.json" "$work/acquisition-result-contradiction.json" "$artifact/"
-          cp "$work/runtime.json" "$work/cases.json" "$artifact/"
-          cp -R "$work/release" "$artifact/release-metadata"
+          if test -d "$work/corpus" && test ! -d "$artifact/release-corpus"; then cp -R "$work/corpus" "$artifact/release-corpus"; fi
+          if test -d "$work/reports"; then
+            mkdir -p "$artifact/reports"
+            for file in "$work"/reports/*; do test -f "$file" && cp "$file" "$artifact/reports/"; done
+          fi
+          for file in "$work"/acquisition*.json "$work"/runtime.json "$work"/cases.json; do
+            test -f "$file" && cp "$file" "$artifact/"
+          done
+          if test -d "$work/release" && test ! -d "$artifact/release-metadata"; then cp -R "$work/release" "$artifact/release-metadata"; fi
           find "$artifact" -type f | sort > "$work/artifact-files.txt"
           artifact_files=$(($(wc -l < "$work/artifact-files.txt" | tr -d ' ')+1))
           printf '%s\n' "$artifact_files" > "$work/artifact-file-count"
