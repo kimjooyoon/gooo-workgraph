@@ -254,7 +254,7 @@ jobs:
           evaluate missing-receipt "$work/selection-input.json" "$work/missing-execution-receipt.json" missing-receipt
           evaluate stale "$work/selection-input.json" "$reports/scenarios/stale.json" stale
           evaluate changed-input "$reports/scenarios/changed-input.json" "$actual" changed-input
-          evaluate digest-laundering "$work/selection-input.json" "$reports/scenarios/digest-laundering.json" laundering
+          evaluate digest-laundering "$work/selection-input.json" "$reports/scenarios/digest-laundering.json" digest-laundering
           evaluate mixed "$work/selection-input.json" "$reports/scenarios/mixed.json" mixed
           evaluate authority-escalation "$work/selection-input.json" "$reports/scenarios/authority-escalation.json" authority-escalation
           evaluate unknown-decision "$work/selection-input.json" "$reports/scenarios/unknown-decision.json" unknown-decision
