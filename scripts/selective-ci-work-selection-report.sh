@@ -384,6 +384,9 @@ jq -S -n \
     scopes:{current_digest:$current_scope_digest,receipt_digest:$receipt_scope_digest,exact_match:$scope_match},
     result:{present:$result_present,digest:$result_digest,semantic_hash:$result_semantic_hash,status:$result_status,diagnostics:typed($result_diagnostics)},
     meta_binding:{activities:$activities,graph_verified:$graph_ok,resolution_verified:$resolution_ok,activity_total:12},
+    performance:($runtime[0].performance // {evaluator_wall_ms:"UNKNOWN",evaluator_peak_rss_kib:"UNKNOWN"}),
+    inventory:($runtime[0].inventory // {root_readme_policy:"EXCLUDED",regular_files:"UNKNOWN",descendant_directories:"UNKNOWN",physical_lines:"UNKNOWN",go:{files:"UNKNOWN",lines:"UNKNOWN"},gooo:{files:"UNKNOWN",lines:"UNKNOWN"}}),
+    artifact_links:{manifest:"manifest.json",human_dossier:"human-dossier.md"},
     authority:{application_root:"CALLER_OWNED_TEMP_ONLY",repository_writes:typed($runtime_writes),local_test_executions:typed($runtime_local_tests),consumer_test_executions:typed($consumer_tests),producer_source_checkout:0,sibling_checkout_reads:0},
     checks:{denominator:$denominator_ok,lock:$lock_ok,input:$input_ok,receipt_schema:$receipt_schema_ok,result:$receipt_result_ok,scope:$scope_match,authority:$authority_clean,graph:$graph_ok,resolution:$resolution_ok,unknown_fields:$unknown_fields_ok,refuted_fields:$refuted_fields_ok,refutation_precedence:$precedence_ok},
     cells:$evaluation.cells,
@@ -407,5 +410,5 @@ jq -e '
 ' "$output_real/report.json" >/dev/null
 
 jq -S --arg subject_sha "$subject_sha" --arg scenario "$scenario" \
-  '{schema:"gooo/workgraph/selective-ci-work-selection/v1",subject_sha:$subject_sha,scenario:$scenario,action:.selection.action,reason:.selection.reason,tests:.selection.tests,metrics:.metrics,claim:.claim}' \
+  '{schema:"gooo/workgraph/selective-ci-work-selection/v1",subject_sha:$subject_sha,scenario:$scenario,action:.selection.action,reason:.selection.reason,tests:.selection.tests,metrics:.metrics,performance:.performance,inventory:.inventory,artifact_links:.artifact_links,claim:.claim}' \
   "$output_real/report.json" > "$output_real/ci-work-selection.json"
