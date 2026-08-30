@@ -74,3 +74,27 @@ The adoption closes one independent public consumer path. It does not claim an
 external user outcome or language-wide generalization, and it never edits the
 producer, Workgraph, or an input project. See
 [the adoption RFC](docs/rfcs/transformation-effect-adoption-v1.md).
+
+## Released test receipt reuse
+
+Workgraph also independently consumes the public
+`gooo-evidence-generator v0.5.0-dev` test-receipt release. The workflow pins
+the annotated tag object and target commit, verifies both release assets and
+their checksum, and inspects all 44 extracted files. It reads exactly one
+producer input file through the immutable contents API at the pinned commit;
+it never checks out the producer repository or reruns its test.
+
+The Workgraph-owned `examples/test-receipt-reuse/main.gooo` declares exactly
+12 activities and is bound one-for-one to the released syntax, semantic,
+graph, and activity-resolution receipts. The consumer independently checks the
+released Gooo tag/commit/asset digest and the baseline `PASS`, result digest,
+semantic hash, and test scope.
+
+CI preserves the normal `12 CLOSED / 0 UNKNOWN / 0 REFUTED` adoption and
+exercises missing release/receipt, stale scope/blob, result contradiction,
+REFUTED-over-UNKNOWN, authority escalation, and unrecognized `FIXED_POINT`
+cases. Every case retains a 12-cell denominator. Test-time savings and
+external utility remain UNKNOWN; this evidence closes exactly one independent
+released receipt consumer.
+
+See [the test receipt reuse RFC](docs/rfcs/test-receipt-reuse-v1.md).
