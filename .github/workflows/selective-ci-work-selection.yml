@@ -120,10 +120,7 @@ jobs:
           source=examples/selective-ci-work-selection/main.gooo
           denominator=contracts/selective-ci-work-selection-denominator-v1.json
           "$binary" version --json > "$work/version.json"
-          test_start_ns=$(date +%s%N)
-          /usr/bin/time -v -o "$work/test-time.txt" "$binary" check --semantic --json "$source" > "$work/semantic.json"
-          test_end_ns=$(date +%s%N)
-          echo $(( (test_end_ns-test_start_ns+999999)/1000000 )) > "$work/test-wall-ms"
+          "$binary" check --semantic --json "$source" > "$work/semantic.json"
           "$binary" graph dump "$source" > "$work/graph.json"
           jq -e '.schema_version=="gooo-version/v1" and .language=="gooo" and .version=="0.2.0-dev"' "$work/version.json" >/dev/null
           jq -e '.schema_version=="gooo/diagnostics/v1" and .command=="check" and .status=="ok" and .diagnostics==[] and .semantic_hash!=null' "$work/semantic.json" >/dev/null
@@ -151,6 +148,10 @@ jobs:
           test "$source_digest" = "$(jq -r .subject.sha256 "$lock")"
           binary_digest=$(sha256sum "$work/toolchain/gooo" | awk '{print $1}')
           test "$binary_digest" = "$(jq -r .gooo.observed_binary_sha256 "$lock")"
+          fixture_start_ns=$(date +%s%N)
+          /usr/bin/time -v -o "$work/fixture-test-time.txt" "$work/toolchain/gooo" check --semantic --json "$source" > "$work/fixture-result.json"
+          fixture_end_ns=$(date +%s%N)
+          echo $(( (fixture_end_ns-fixture_start_ns+999999)/1000000 )) > "$work/test-wall-ms"
           scenario_descriptor=$(jq -S -n --arg test "released-gooo-semantic-test" --arg fixture "$source" \
             '{test:$test,fixture:$fixture,runner:"released-gooo",mode:"semantic-check"}')
           scenario_digest=$(printf '%s' "$scenario_descriptor" | sha256sum | awk '{print $1}')
@@ -163,10 +164,12 @@ jobs:
             '{schema:"gooo/workgraph/selective-ci-work-selection-input/v1",subject_sha:$subject,current_scope:$scope,
               tests:[{id:"released-gooo-semantic-test",required:true,scope:$scope,receipt_selector:"baseline-test-receipt.json"}]}' > "$work/selection-input.json"
           prior_receipt_digest=$(sha256sum "$work/released/baseline-test-receipt.json" | awk '{print $1}')
-          result_digest=$(sha256sum "$work/semantic.json" | awk '{print $1}')
-          semantic_hash=$(jq -r .semantic_hash "$work/semantic.json")
+          result_digest=$(sha256sum "$work/fixture-result.json" | awk '{print $1}')
+          semantic_hash=$(jq -r .semantic_hash "$work/fixture-result.json")
           test_wall_ms=$(cat "$work/test-wall-ms")
-          test_peak_rss_kib=$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$work/test-time.txt")
+          test_peak_rss_kib=$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$work/fixture-test-time.txt")
+          test "$test_wall_ms" -gt 0
+          test -n "$test_peak_rss_kib"
           jq -S -n --arg subject "$SUBJECT_SHA" --arg prior "$prior_receipt_digest" --argjson scope "$scope" \
             --arg digest "$result_digest" --arg semantic "$semantic_hash" --arg wall "$test_wall_ms" --arg rss "$test_peak_rss_kib" \
             '{schema:"gooo/workgraph/actual-test-execution-receipt/v1",subject_sha:$subject,
@@ -191,7 +194,7 @@ jobs:
           denominator=contracts/selective-ci-work-selection-denominator-v1.json
           prior="$work/released/baseline-test-receipt.json"
           actual="$work/execution-receipt.json"
-          result="$work/semantic.json"
+          result="$work/fixture-result.json"
           reports="$work/reports"
           mkdir -p "$reports/scenarios"
           zeros=$(printf '0%.0s' {1..64})
@@ -224,7 +227,7 @@ jobs:
           scenario_descriptor=$(jq -r .scenario.descriptor "$work/runtime-base.json")
           jq -S -n --arg subject "$SUBJECT_SHA" --arg scenario_digest "$scenario_digest" --arg scenario_descriptor "$scenario_descriptor" \
             --argjson wall_ms "$wall_ms" --argjson peak_rss_kib "$peak_rss_kib" --arg test_wall_ms "$(cat "$work/test-wall-ms")" \
-            --arg test_peak_rss_kib "$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$work/test-time.txt")" \
+            --arg test_peak_rss_kib "$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$work/fixture-test-time.txt")" \
             --argjson regular_files "$regular_files" --argjson descendant_directories "$descendant_directories" \
             --argjson physical_lines "$physical_lines" --argjson go_files "$go_files" --argjson go_lines "$go_lines" \
             --argjson gooo_files "$gooo_files" --argjson gooo_lines "$gooo_lines" \
@@ -312,7 +315,7 @@ jobs:
           work="$RUNNER_TEMP/selective-ci-work-selection"
           artifact="$work/artifact"
           mkdir -p "$artifact"
-          for file in "$work"/acquisition.json "$work"/selection-input.json "$work"/runtime.json "$work"/cases.json "$work"/manifest.json "$work"/human-dossier.md "$work"/version.json "$work"/semantic.json "$work"/graph.json "$work"/resolution.json "$work"/execution-receipt.json; do
+          for file in "$work"/acquisition.json "$work"/selection-input.json "$work"/runtime.json "$work"/cases.json "$work"/manifest.json "$work"/human-dossier.md "$work"/version.json "$work"/semantic.json "$work"/fixture-result.json "$work"/graph.json "$work"/resolution.json "$work"/execution-receipt.json; do
             test -f "$file" && cp "$file" "$artifact/"
           done
           if test -d "$work/reports"; then cp -R "$work/reports" "$artifact/reports"; fi
