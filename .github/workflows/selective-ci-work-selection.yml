@@ -182,7 +182,7 @@ jobs:
 
           evaluate() {
             local name=$1 input=$2 receipt_path=$3
-            bash scripts/selective-ci-work-selection-report.sh "$GITHUB_WORKSPACE" "$input" "$lock" "$receipt_path" "$result" \
+            bash -x scripts/selective-ci-work-selection-report.sh "$GITHUB_WORKSPACE" "$input" "$lock" "$receipt_path" "$result" \
               "$denominator" "$work/graph.json" "$work/resolution.json" "$work/runtime.json" "$reports/$name" "$SUBJECT_SHA" "$name"
           }
           evaluate exact-match-reuse "$work/selection-input.json" "$receipt"
