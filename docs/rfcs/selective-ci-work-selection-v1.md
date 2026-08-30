@@ -1,15 +1,16 @@
-# RFC: Workgraph exact receipt selective-CI work selection v1
+# RFC: Workgraph actual receipt and already-tested selective-CI boundary v1
 
-Status: Implemented independent selective-CI consumer
+Status: Implemented actual execution receipt and already-tested boundary
 
 ## Decision
 
-Workgraph turns one released exact Gooo test receipt into a CI work-selection
-decision. An exact match selects `REUSE`; a changed input, toolchain, command,
-or scope selects `RERUN_REQUIRED`. A missing receipt is `UNKNOWN` evidence and
-the safe work action is still `RERUN_REQUIRED`. The decision is deterministic:
-it compares the complete serialized test scope and independently verifies the
-result digest and trusted semantic hash before selecting reuse.
+Workgraph turns one real released-Gooo fixture execution and one released
+exact test receipt into a CI work-selection decision. `REUSE` is CLOSED only
+when the immutable input digest, toolchain digest, scenario digest, complete
+scope, result digest, trusted semantic hash, and clean authority all match.
+Missing, stale, changed, unknown, contradictory, or laundered evidence is
+fail-closed as `RERUN_REQUIRED`; a known REFUTED result has priority over
+UNKNOWN evidence.
 
 This is a new consumer boundary on top of the released receipt. It does not
 duplicate the full receipt-corpus adoption in the existing #7 workflow and it
@@ -18,9 +19,12 @@ does not run the producer or consumer test while making the selection.
 ## Fixed denominator and meta binding
 
 The contract has exactly 12 cells and the Gooo meta source has exactly 12
-activities. CI obtains the graph from the released Gooo CLI and checks the
-activity name set and resolution entries one-for-one against the denominator.
-No selection metric is accepted without its corresponding activity.
+activities. The source explicitly declares `PlannedTest`, `ExecutedTest`,
+`ReusedPriorReceipt`, `InvalidatedReceipt`, `RequiredWork`, and
+`UnknownCausalFrontier`. CI obtains generated semantic IR and the graph from
+the released Gooo CLI and checks the activity name set, source digest,
+semantic digest, and resolution entries one-for-one against the denominator.
+The report emits an exact cell-to-activity-to-IR pointer for every metric.
 
 The denominator is balanced as `FOUNDATION 4 / COHERENCE 4 / REGRESSION 4` and
 `DRIVER 4 / OUTCOME 4 / GUARDRAIL 4`.
@@ -43,12 +47,14 @@ not sufficient.
 
 | Case | Selection | Workgraph result |
 |---|---|---|
-| exact-match-reuse | `REUSE` | 12 CLOSED / 0 UNKNOWN / 0 REFUTED |
-| changed-input-rerun | `RERUN_REQUIRED` | REFUTED; rerun required |
+| normal | `REUSE` | 12 CLOSED / 0 UNKNOWN / 0 REFUTED |
 | missing-receipt | `RERUN_REQUIRED` | UNKNOWN; six UNKNOWN fields preserved |
-| digest-valid-semantic-laundering | `RERUN_REQUIRED` | REFUTED |
+| stale | `RERUN_REQUIRED` | REFUTED; stale scenario digest |
+| changed-input | `RERUN_REQUIRED` | REFUTED; immutable input digest changed |
+| digest-laundering | `RERUN_REQUIRED` | REFUTED; trusted semantic identity disagrees |
 | mixed | `RERUN_REQUIRED` | REFUTED takes priority over UNKNOWN |
-| authority-escalation | `RERUN_REQUIRED` | REFUTED |
+| authority-escalation | `RERUN_REQUIRED` | REFUTED; cross-project gate escalated |
+| unknown-decision | `RERUN_REQUIRED` | UNKNOWN; decision is not promoted |
 
 All UNKNOWN and REFUTED cells retain `stage`, `step`, `reason`,
 `unknown_class`, `next_operation`, and `blocked_by`. A REFUTED predecessor is
@@ -56,22 +62,22 @@ resolved before an UNKNOWN predecessor and controls the top-level claim.
 
 ## Metrics and authority
 
-The report exposes these six metrics as either an integer or the literal
-`UNKNOWN`: `tests_planned`, `tests_reused`, `tests_required_to_execute`,
-`producer_test_executions_observed`, `consumer_test_executions`, and
-`saved_test_ms`. The normal fixture is `1 / 1 / 0 / 1 / 0 / UNKNOWN` in that
-order. A missing receipt does not become a false zero for observed producer
-executions. No time improvement is claimed: `saved_test_ms` remains `UNKNOWN`
-unless an exact before/after timing pair under identical conditions exists.
+The report exposes the five boundary counts as either an integer or the
+literal `UNKNOWN`: `tests_planned`, `tests_executed`, `tests_reused`,
+`tests_invalidated`, and `tests_required_to_execute`, while retaining producer
+and consumer execution observations. The normal fixture is
+`1 / 1 / 1 / 0 / 0` in that order. It also records fixture `test_wall_ms` and
+`test_peak_rss_kib`; `saved_test_ms` remains `UNKNOWN` unless an exact
+before/after timing pair under identical conditions exists.
 
 The evaluator writes only to an empty caller-owned temporary directory. CI
 asserts `repository_writes=0`, `local_test_executions=0`, and
-`consumer_test_executions=0`. The changed-input and authority cases verify
-that a rerun is required without performing that rerun in this consumer job.
+`cross_project_required_gates=0` for the clean path; authority-escalation is
+retained as a REFUTED counterexample. The changed-input and stale cases verify
+that work is required without silently reusing the prior receipt.
 
 The report links to a deterministic manifest and human dossier. Both preserve
-the integer evaluator `wall_ms` and `peak_rss_kib` observations and the
-root-README-excluded inventory of regular files, descendant directories,
-physical lines, Go files/lines, and Gooo files/lines. These observations are
-not quality scores or improvement claims; `saved_test_ms` remains `UNKNOWN`
-without an exact before/after timing pair.
+fixture and evaluator wall/RSS observations, the six-field UNKNOWN causal
+frontier, root-README-excluded regular files, descendant directories,
+physical lines, Go files/lines, Gooo files/lines, artifact file count, and Go
+1.27. These observations are not quality scores or improvement claims.

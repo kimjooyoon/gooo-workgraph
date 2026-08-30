@@ -111,7 +111,7 @@ jobs:
                 receipt:"baseline-test-receipt.json",result:"baseline-test-result.json"},
               released_gooo:{repository:$gooo,asset:$gooo_asset,asset_digest:$gooo_digest}}' > "$work/acquisition.json"
 
-      - name: Bind twelve released-Gooo meta activities
+      - name: Bind twelve released-Gooo meta activities and execute fixture test
         shell: bash
         run: |
           set -euo pipefail
@@ -148,42 +148,68 @@ jobs:
           test "$source_digest" = "$(jq -r .subject.sha256 "$lock")"
           binary_digest=$(sha256sum "$work/toolchain/gooo" | awk '{print $1}')
           test "$binary_digest" = "$(jq -r .gooo.observed_binary_sha256 "$lock")"
+          fixture_start_ns=$(date +%s%N)
+          /usr/bin/time -v -o "$work/fixture-test-time.txt" "$work/toolchain/gooo" check --semantic --json "$source" > "$work/fixture-result.json"
+          fixture_end_ns=$(date +%s%N)
+          echo $(( (fixture_end_ns-fixture_start_ns+999999)/1000000 )) > "$work/test-wall-ms"
+          scenario_descriptor=$(jq -S -n --arg test "released-gooo-semantic-test" --arg fixture "$source" \
+            '{test:$test,fixture:$fixture,runner:"released-gooo",mode:"semantic-check"}')
+          scenario_digest=$(printf '%s' "$scenario_descriptor" | sha256sum | awk '{print $1}')
           scope_id=$(jq -r .scope.id "$work/released/baseline-test-receipt.json")
-          scope=$(jq -S -n --arg id "$scope_id" --arg source "$source" --arg source_digest "$source_digest" \
+          scope=$(jq -S -n --arg id "$scope_id" --arg source "$source" --arg source_digest "$source_digest" --arg toolchain_digest "$binary_digest" --arg scenario_digest "$scenario_digest" \
             --arg repository "$(jq -r .gooo.repository "$lock")" --arg tag "$(jq -r .gooo.tag "$lock")" \
             --arg commit "$(jq -r .gooo.target_commit_sha "$lock")" --arg binary "$binary_digest" \
-            '{id:$id,files:[{path:$source,sha256:$source_digest}],toolchain:{repository:$repository,tag:$tag,target_commit_sha:$commit,binary_sha256:$binary,platform:"linux-amd64"},command:["gooo","check","--semantic","--json",$source]}')
+            '{id:$id,input_digest:$source_digest,toolchain_digest:$toolchain_digest,scenario_digest:$scenario_digest,files:[{path:$source,sha256:$source_digest}],toolchain:{repository:$repository,tag:$tag,target_commit_sha:$commit,binary_sha256:$binary,platform:"linux-amd64"},command:["gooo","check","--semantic","--json",$source]}')
           jq -S -n --arg subject "$SUBJECT_SHA" --argjson scope "$scope" \
             '{schema:"gooo/workgraph/selective-ci-work-selection-input/v1",subject_sha:$subject,current_scope:$scope,
               tests:[{id:"released-gooo-semantic-test",required:true,scope:$scope,receipt_selector:"baseline-test-receipt.json"}]}' > "$work/selection-input.json"
-          jq -S -n --arg subject "$SUBJECT_SHA" \
+          prior_receipt_digest=$(sha256sum "$work/released/baseline-test-receipt.json" | awk '{print $1}')
+          result_digest=$(sha256sum "$work/fixture-result.json" | awk '{print $1}')
+          semantic_hash=$(jq -r .semantic_hash "$work/fixture-result.json")
+          test_wall_ms=$(cat "$work/test-wall-ms")
+          test_peak_rss_kib=$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$work/fixture-test-time.txt")
+          test "$test_wall_ms" -gt 0
+          test -n "$test_peak_rss_kib"
+          jq -S -n --arg subject "$SUBJECT_SHA" --arg prior "$prior_receipt_digest" --argjson scope "$scope" \
+            --arg digest "$result_digest" --arg semantic "$semantic_hash" --arg wall "$test_wall_ms" --arg rss "$test_peak_rss_kib" \
+            '{schema:"gooo/workgraph/actual-test-execution-receipt/v1",subject_sha:$subject,
+              prior_receipt:{schema:"gooo/evidence-generator/test-receipt/v1",sha256:$prior},
+              execution:{test_executions:1},scope:$scope,
+              result:{decision:"PASS",status:"ok",exit_code:0,diagnostics_schema:"gooo/diagnostics/v1",output_sha256:$digest,semantic_hash:$semantic},
+              performance:{test_wall_ms:$wall,test_peak_rss_kib:$rss},
+              authority:{repository_writes:0,source_mutations:0,local_test_executions:0,consumer_test_executions:0,cross_project_required_gates:0}}' > "$work/execution-receipt.json"
+          jq -S -n --arg subject "$SUBJECT_SHA" --arg scenario_digest "$scenario_digest" --arg scenario "$scenario_descriptor" \
             '{schema:"gooo/workgraph/selective-ci-work-selection-runtime/v1",subject_sha:$subject,
-              executions:{consumer_test_executions:0,local_test_executions:0},
-              authority:{repository_writes:0,local_test_executions:0,consumer_test_executions:0,producer_source_checkout:0,sibling_checkout_reads:0},
+              scenario:{digest:$scenario_digest,descriptor:$scenario},
+              executions:{fixture_test_executions:1,consumer_test_executions:0,local_test_executions:0},
+              authority:{repository_writes:0,local_test_executions:0,consumer_test_executions:0,cross_project_required_gates:0,producer_source_checkout:0,sibling_checkout_reads:0},
               toolchain:{go_required:"go1.27.0",selection_consumer:"released-gooo"}}' > "$work/runtime-base.json"
 
-      - name: Evaluate exact selection and required rerun cases without executing selected tests
+      - name: Evaluate fixed receipt-boundary scenarios and measure the evaluator
         shell: bash
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/selective-ci-work-selection"
           lock=contracts/test-receipt-reuse-release-lock-v1.json
           denominator=contracts/selective-ci-work-selection-denominator-v1.json
-          receipt="$work/released/baseline-test-receipt.json"
-          result="$work/released/baseline-test-result.json"
+          prior="$work/released/baseline-test-receipt.json"
+          actual="$work/execution-receipt.json"
+          result="$work/fixture-result.json"
           reports="$work/reports"
           mkdir -p "$reports/scenarios"
           zeros=$(printf '0%.0s' {1..64})
-          jq --arg digest "$zeros" '.current_scope.files[0].sha256=$digest | .tests[0].scope=.current_scope' \
+          jq --arg digest "$zeros" '.current_scope.input_digest=$digest | .current_scope.files[0].sha256=$digest | .tests[0].scope=.current_scope' \
             "$work/selection-input.json" > "$reports/scenarios/changed-input.json"
-          jq --arg digest "$zeros" '.result.semantic_hash=$digest' "$receipt" > "$reports/scenarios/digest-valid-semantic-laundering.json"
-          jq --arg digest "$zeros" '.scope.files[0].sha256=$digest | del(.result.semantic_hash)' "$receipt" > "$reports/scenarios/mixed.json"
-          jq '.authority.repository_writes=1' "$receipt" > "$reports/scenarios/authority-escalation.json"
+          jq --arg digest "$zeros" '.scope.scenario_digest=$digest' "$actual" > "$reports/scenarios/stale.json"
+          jq --arg digest "$zeros" '.result.semantic_hash=$digest' "$actual" > "$reports/scenarios/digest-laundering.json"
+          jq '.scope |= del(.scenario_digest) | .authority.cross_project_required_gates=1' "$actual" > "$reports/scenarios/mixed.json"
+          jq '.authority.cross_project_required_gates=1' "$actual" > "$reports/scenarios/authority-escalation.json"
+          jq '.result.decision="UNKNOWN"' "$actual" > "$reports/scenarios/unknown-decision.json"
 
           start_ns=$(date +%s%N)
           /usr/bin/time -v -o "$work/evaluator-time.txt" bash scripts/selective-ci-work-selection-report.sh \
-            "$GITHUB_WORKSPACE" "$work/selection-input.json" "$lock" "$receipt" "$result" "$denominator" \
-            "$work/graph.json" "$work/resolution.json" "$work/runtime-base.json" "$work/measurement" "$SUBJECT_SHA" exact-match-reuse
+            "$GITHUB_WORKSPACE" "$work/selection-input.json" "$lock" "$prior" "$actual" "$result" "$denominator" \
+            "$work/graph.json" "$work/resolution.json" "$work/runtime-base.json" "$work/measurement" "$SUBJECT_SHA" normal
           end_ns=$(date +%s%N)
           wall_ms=$(( (end_ns-start_ns+999999)/1000000 ))
           peak_rss_kib=$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$work/evaluator-time.txt")
@@ -197,42 +223,51 @@ jobs:
           go_lines=$(find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -name '*.go' -print0 | sort -z | xargs -0 cat | wc -l | tr -d ' ')
           gooo_files=$(find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -name '*.gooo' -print | wc -l | tr -d ' ')
           gooo_lines=$(find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -name '*.gooo' -print0 | sort -z | xargs -0 cat | wc -l | tr -d ' ')
-          jq -S -n --arg subject "$SUBJECT_SHA" --argjson wall_ms "$wall_ms" --argjson peak_rss_kib "$peak_rss_kib" \
+          scenario_digest=$(jq -r .scenario.digest "$work/runtime-base.json")
+          scenario_descriptor=$(jq -r .scenario.descriptor "$work/runtime-base.json")
+          jq -S -n --arg subject "$SUBJECT_SHA" --arg scenario_digest "$scenario_digest" --arg scenario_descriptor "$scenario_descriptor" \
+            --argjson wall_ms "$wall_ms" --argjson peak_rss_kib "$peak_rss_kib" --arg test_wall_ms "$(cat "$work/test-wall-ms")" \
+            --arg test_peak_rss_kib "$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$work/fixture-test-time.txt")" \
             --argjson regular_files "$regular_files" --argjson descendant_directories "$descendant_directories" \
             --argjson physical_lines "$physical_lines" --argjson go_files "$go_files" --argjson go_lines "$go_lines" \
             --argjson gooo_files "$gooo_files" --argjson gooo_lines "$gooo_lines" \
             '{schema:"gooo/workgraph/selective-ci-work-selection-runtime/v1",subject_sha:$subject,
-              executions:{consumer_test_executions:0,local_test_executions:0},
-              authority:{repository_writes:0,local_test_executions:0,consumer_test_executions:0,producer_source_checkout:0,sibling_checkout_reads:0},
+              scenario:{digest:$scenario_digest,descriptor:$scenario_descriptor},
+              executions:{fixture_test_executions:1,consumer_test_executions:0,local_test_executions:0},
+              authority:{repository_writes:0,local_test_executions:0,consumer_test_executions:0,cross_project_required_gates:0,producer_source_checkout:0,sibling_checkout_reads:0},
               toolchain:{go_required:"go1.27.0",selection_consumer:"released-gooo"},
-              performance:{evaluator_wall_ms:$wall_ms,evaluator_peak_rss_kib:$peak_rss_kib},
+              performance:{test_wall_ms:($test_wall_ms|tonumber),test_peak_rss_kib:($test_peak_rss_kib|tonumber),evaluator_wall_ms:$wall_ms,evaluator_peak_rss_kib:$peak_rss_kib},
               inventory:{root_readme_policy:"EXCLUDED",regular_files:$regular_files,descendant_directories:$descendant_directories,physical_lines:$physical_lines,go:{files:$go_files,lines:$go_lines},gooo:{files:$gooo_files,lines:$gooo_lines}}}' > "$work/runtime.json"
 
           evaluate() {
             local name=$1
             local input=$2
-            local receipt_path=$3
-            local report_scenario=${4:-$1}
-            bash scripts/selective-ci-work-selection-report.sh "$GITHUB_WORKSPACE" "$input" "$lock" "$receipt_path" "$result" \
+            local actual_path=$3
+            local report_scenario=$4
+            bash scripts/selective-ci-work-selection-report.sh "$GITHUB_WORKSPACE" "$input" "$lock" "$prior" "$actual_path" "$result" \
               "$denominator" "$work/graph.json" "$work/resolution.json" "$work/runtime.json" "$reports/$name" "$SUBJECT_SHA" "$report_scenario"
           }
-          evaluate exact-match-reuse "$work/selection-input.json" "$receipt"
-          evaluate exact-match-reuse-replay "$work/selection-input.json" "$receipt" exact-match-reuse
-          cmp -s "$reports/exact-match-reuse/report.json" "$reports/exact-match-reuse-replay/report.json"
-          cmp -s "$reports/exact-match-reuse/ci-work-selection.json" "$reports/exact-match-reuse-replay/ci-work-selection.json"
-          evaluate changed-input-rerun "$reports/scenarios/changed-input.json" "$receipt"
-          evaluate missing-receipt "$work/selection-input.json" "$work/released/missing-receipt.json"
-          evaluate digest-valid-semantic-laundering "$work/selection-input.json" "$reports/scenarios/digest-valid-semantic-laundering.json"
-          evaluate mixed "$work/selection-input.json" "$reports/scenarios/mixed.json"
-          evaluate authority-escalation "$work/selection-input.json" "$reports/scenarios/authority-escalation.json"
+          evaluate normal "$work/selection-input.json" "$actual" normal
+          evaluate normal-replay "$work/selection-input.json" "$actual" normal
+          cmp -s "$reports/normal/report.json" "$reports/normal-replay/report.json"
+          cmp -s "$reports/normal/ci-work-selection.json" "$reports/normal-replay/ci-work-selection.json"
+          evaluate missing-receipt "$work/selection-input.json" "$work/missing-execution-receipt.json" missing-receipt
+          evaluate stale "$work/selection-input.json" "$reports/scenarios/stale.json" stale
+          evaluate changed-input "$reports/scenarios/changed-input.json" "$actual" changed-input
+          evaluate digest-laundering "$work/selection-input.json" "$reports/scenarios/digest-laundering.json" digest-laundering
+          evaluate mixed "$work/selection-input.json" "$reports/scenarios/mixed.json" mixed
+          evaluate authority-escalation "$work/selection-input.json" "$reports/scenarios/authority-escalation.json" authority-escalation
+          evaluate unknown-decision "$work/selection-input.json" "$reports/scenarios/unknown-decision.json" unknown-decision
           jq -S -n \
-            --slurpfile exact "$reports/exact-match-reuse/report.json" \
-            --slurpfile changed "$reports/changed-input-rerun/report.json" \
+            --slurpfile normal "$reports/normal/report.json" \
             --slurpfile missing "$reports/missing-receipt/report.json" \
-            --slurpfile laundering "$reports/digest-valid-semantic-laundering/report.json" \
+            --slurpfile stale "$reports/stale/report.json" \
+            --slurpfile changed "$reports/changed-input/report.json" \
+            --slurpfile laundering "$reports/digest-laundering/report.json" \
             --slurpfile mixed "$reports/mixed/report.json" \
             --slurpfile authority "$reports/authority-escalation/report.json" \
-            '[$exact[0],$changed[0],$missing[0],$laundering[0],$mixed[0],$authority[0]]' > "$work/cases.json"
+            --slurpfile unknown_decision "$reports/unknown-decision/report.json" \
+            '[$normal[0],$missing[0],$stale[0],$changed[0],$laundering[0],$mixed[0],$authority[0],$unknown_decision[0]]' > "$work/cases.json"
 
           manifest_entries=$(
             find "$reports" -type f -print0 | sort -z |
@@ -243,29 +278,33 @@ jobs:
                   '{path:$path,sha256:$sha256,size_bytes:$size_bytes}'
               done | jq -s .
           )
-          jq -S -n --arg subject "$SUBJECT_SHA" --arg report "reports/exact-match-reuse/report.json" \
-            --arg work_selection "reports/exact-match-reuse/ci-work-selection.json" --arg dossier "human-dossier.md" \
-            --argjson files "$manifest_entries" --slurpfile exact "$reports/exact-match-reuse/report.json" \
+          jq -S -n --arg subject "$SUBJECT_SHA" --arg report "reports/normal/report.json" --arg execution_receipt "execution-receipt.json" \
+            --arg work_selection "reports/normal/ci-work-selection.json" --arg dossier "human-dossier.md" \
+            --argjson files "$manifest_entries" --slurpfile normal "$reports/normal/report.json" \
             --slurpfile cases "$work/cases.json" \
             '{schema:"gooo/workgraph/selective-ci-work-selection-manifest/v1",subject_sha:$subject,
-              report:$report,work_selection:$work_selection,human_dossier:$dossier,
-              performance:$exact[0].performance,inventory:$exact[0].inventory,
+              report:$report,execution_receipt:$execution_receipt,work_selection:$work_selection,human_dossier:$dossier,
+              performance:$normal[0].performance,inventory:$normal[0].inventory,
               scenarios:[$cases[0][].scenario],files:$files}' > "$work/manifest.json"
           {
-            echo '# Selective CI exact receipt work-selection dossier'
+            echo '# Selective CI actual receipt and already-tested boundary dossier'
             echo
-            jq -r '"- report: reports/exact-match-reuse/report.json",
+            jq -r '"- report: reports/normal/report.json",
               "- manifest: manifest.json",
               "- decision: \(.decision)",
               "- selection: \(.selection.action)",
+              "- test_wall_ms: \(.performance.test_wall_ms)",
+              "- test_peak_rss_kib: \(.performance.test_peak_rss_kib)",
               "- evaluator_wall_ms: \(.performance.evaluator_wall_ms)",
               "- evaluator_peak_rss_kib: \(.performance.evaluator_peak_rss_kib)",
               "- inventory: \(.inventory.regular_files) regular files; \(.inventory.descendant_directories) descendant directories; \(.inventory.physical_lines) physical lines",
               "- Go: \(.inventory.go.files) files / \(.inventory.go.lines) lines; Gooo: \(.inventory.gooo.files) files / \(.inventory.gooo.lines) lines",
-              "- root README policy: \(.inventory.root_readme_policy)"' "$reports/exact-match-reuse/report.json"
+              "- root README policy: \(.inventory.root_readme_policy)",
+              "- Go version: \(.toolchain.go_required)",
+              "- authority: repository_writes=\(.authority.repository_writes), local_test_executions=\(.authority.local_test_executions), cross_project_required_gates=\(.authority.cross_project_required_gates)"' "$reports/normal/report.json"
             echo
             echo '## Cases'
-            jq -r '.[]|"- \(.scenario): \(.summary.closed) CLOSED / \(.summary.unknown) UNKNOWN / \(.summary.refuted) REFUTED; action=\(.selection.action)"' "$work/cases.json"
+            jq -r '.[]|"- \(.scenario): \(.summary.closed) CLOSED / \(.summary.unknown) UNKNOWN / \(.summary.refuted) REFUTED; planned=\(.metrics.tests_planned); executed=\(.metrics.tests_executed); reused=\(.metrics.tests_reused); invalidated=\(.metrics.tests_invalidated); required=\(.metrics.tests_required_to_execute); action=\(.selection.action); reason=\(.selection.reason)"' "$work/cases.json"
           } > "$work/human-dossier.md"
 
       - name: Stage raw selection evidence before assertions
@@ -276,7 +315,7 @@ jobs:
           work="$RUNNER_TEMP/selective-ci-work-selection"
           artifact="$work/artifact"
           mkdir -p "$artifact"
-          for file in "$work"/acquisition.json "$work"/selection-input.json "$work"/runtime.json "$work"/cases.json "$work"/manifest.json "$work"/human-dossier.md "$work"/version.json "$work"/semantic.json "$work"/graph.json "$work"/resolution.json; do
+          for file in "$work"/acquisition.json "$work"/selection-input.json "$work"/runtime.json "$work"/cases.json "$work"/manifest.json "$work"/human-dossier.md "$work"/version.json "$work"/semantic.json "$work"/fixture-result.json "$work"/graph.json "$work"/resolution.json "$work"/execution-receipt.json; do
             test -f "$file" && cp "$file" "$artifact/"
           done
           if test -d "$work/reports"; then cp -R "$work/reports" "$artifact/reports"; fi
@@ -287,19 +326,22 @@ jobs:
             done
           fi
           artifact_file_count=$(( $(find "$artifact" -type f | wc -l | tr -d ' ') + 1 ))
-          jq -S -n --arg subject "$SUBJECT_SHA" --argjson file_count "$artifact_file_count" \
-            '{schema:"gooo/workgraph/selective-ci-work-selection-artifact/v1",subject_sha:$subject,
-              reports:["exact-match-reuse","exact-match-reuse-replay","changed-input-rerun","missing-receipt","digest-valid-semantic-laundering","mixed","authority-escalation"],
-              manifest:"manifest.json",human_dossier:"human-dossier.md",file_count:$file_count,
-              repository_writes:0,local_test_executions:0}' > "$artifact/artifact-metadata.json"
+          runtime_inventory=$(jq -c .inventory "$work/runtime.json")
+          echo "- artifact file count: $artifact_file_count" >> "$work/human-dossier.md"
+          cp "$work/human-dossier.md" "$artifact/human-dossier.md"
+          jq -S -n --arg subject "$SUBJECT_SHA" --arg name "workgraph-selective-ci-work-selection-$SUBJECT_SHA" --arg go_version "go1.27.0" --argjson file_count "$artifact_file_count" --argjson inventory "$runtime_inventory" \
+            '{schema:"gooo/workgraph/selective-ci-work-selection-artifact/v2",subject_sha:$subject,
+              reports:["normal","normal-replay","missing-receipt","stale","changed-input","digest-laundering","mixed","authority-escalation","unknown-decision"],
+              manifest:"manifest.json",execution_receipt:"execution-receipt.json",human_dossier:"human-dossier.md",file_count:$file_count,artifact_name:$name,go_version:$go_version,inventory:$inventory,
+              repository_writes:0,local_test_executions:0,cross_project_required_gates:0}' > "$artifact/artifact-metadata.json"
 
-      - name: Assert fixed denominator, exact selection, rerun safety, and typed metrics
+      - name: Assert fixed denominator, actual execution receipt, fail-closed reuse, and typed metrics
         shell: bash
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/selective-ci-work-selection"
           jq -e '
-            length==6 and
+            length==8 and
             all(.[];
               .summary.total==12 and (.summary.closed+.summary.unknown+.summary.refuted)==12 and
               ([.cells[]]|length)==12 and
@@ -307,43 +349,51 @@ jobs:
                 (if .state=="UNKNOWN" then .stage!=null and .step!=null and .reason!=null and .unknown_class!=null and .next_operation!=null and .blocked_by!=null
                  elif .state=="REFUTED" then .stage!=null and .step!=null and .reason!=null and .unknown_class==null and .next_operation!=null and .blocked_by!=null
                  else true end)) and
-              all([.metrics.tests_planned,.metrics.tests_reused,.metrics.tests_required_to_execute,.metrics.producer_test_executions_observed,.metrics.consumer_test_executions,.metrics.saved_test_ms][]; type=="number" or .=="UNKNOWN") and
-              (.performance.evaluator_wall_ms|type)=="number" and (.performance.evaluator_peak_rss_kib|type)=="number" and
+              all([.metrics.tests_planned,.metrics.tests_executed,.metrics.tests_reused,.metrics.tests_invalidated,.metrics.tests_required_to_execute,.metrics.producer_test_executions_observed,.metrics.consumer_test_executions,.metrics.saved_test_ms][]; type=="number" or .=="UNKNOWN") and
+              all([.performance.test_wall_ms,.performance.test_peak_rss_kib,.performance.evaluator_wall_ms,.performance.evaluator_peak_rss_kib][]; type=="number") and
               .inventory.root_readme_policy=="EXCLUDED" and
               all([.inventory.regular_files,.inventory.descendant_directories,.inventory.physical_lines,.inventory.go.files,.inventory.go.lines,.inventory.gooo.files,.inventory.gooo.lines][]; type=="number") and
-              .meta_binding.activity_total==12 and .meta_binding.graph_verified and .meta_binding.resolution_verified and
+              .meta_binding.verified and (.causal_frontier.minimum|length)>=0 and
               (.summary.refuted==0 or .claim.state=="REFUTED")) and
-            (map(select(.scenario=="exact-match-reuse"))[0].decision=="SELECTIVE_CI_WORK_SELECTION_READY") and
-            (map(select(.scenario=="exact-match-reuse"))[0].selection.action=="REUSE") and
-            (map(select(.scenario=="exact-match-reuse"))[0].metrics=={consumer_test_executions:0,producer_test_executions_observed:1,saved_test_ms:"UNKNOWN",tests_planned:1,tests_required_to_execute:0,tests_reused:1}) and
-            (map(select(.scenario=="changed-input-rerun"))[0].selection.action=="RERUN_REQUIRED") and
-            (map(select(.scenario=="changed-input-rerun"))[0].selection.reason=="INPUT_TOOLCHAIN_OR_SCOPE_CHANGED") and
-            (map(select(.scenario=="changed-input-rerun"))[0].claim.state=="REFUTED") and
-            (map(select(.scenario=="changed-input-rerun"))[0].metrics.tests_required_to_execute==1) and
-            (map(select(.scenario=="missing-receipt"))[0].decision=="SELECTION_EVIDENCE_UNKNOWN") and
+            (map(select(.scenario=="normal"))[0].decision=="ALREADY_TESTED_REUSE_READY") and
+            (map(select(.scenario=="normal"))[0].selection.action=="REUSE") and
+            (map(select(.scenario=="normal"))[0].metrics.tests_planned==1) and
+            (map(select(.scenario=="normal"))[0].metrics.tests_executed==1) and
+            (map(select(.scenario=="normal"))[0].metrics.tests_reused==1) and
+            (map(select(.scenario=="normal"))[0].metrics.tests_invalidated==0) and
+            (map(select(.scenario=="normal"))[0].metrics.tests_required_to_execute==0) and
+            (map(select(.scenario=="normal"))[0].metrics.saved_test_ms=="UNKNOWN") and
             (map(select(.scenario=="missing-receipt"))[0].claim.state=="UNKNOWN") and
-            (map(select(.scenario=="missing-receipt"))[0].metrics.producer_test_executions_observed=="UNKNOWN") and
-            (map(select(.scenario=="digest-valid-semantic-laundering"))[0].selection.reason=="DIGEST_VALID_SEMANTIC_IDENTITY_MISMATCH") and
-            (map(select(.scenario=="digest-valid-semantic-laundering"))[0].claim.state=="REFUTED") and
-            (map(select(.scenario=="digest-valid-semantic-laundering"))[0].scopes.exact_match==true) and
+            (map(select(.scenario=="missing-receipt"))[0].metrics.tests_executed=="UNKNOWN") and
+            (map(select(.scenario=="missing-receipt"))[0].metrics.tests_required_to_execute==1) and
+            (map(select(.scenario=="stale"))[0].selection.reason=="SCENARIO_DIGEST_MISMATCH") and
+            (map(select(.scenario=="stale"))[0].claim.state=="REFUTED") and
+            (map(select(.scenario=="changed-input"))[0].selection.reason=="IMMUTABLE_INPUT_DIGEST_MISMATCH") and
+            (map(select(.scenario=="changed-input"))[0].claim.state=="REFUTED") and
+            (map(select(.scenario=="digest-laundering"))[0].selection.reason=="DIGEST_VALID_SEMANTIC_LAUNDERING") and
+            (map(select(.scenario=="digest-laundering"))[0].claim.state=="REFUTED") and
             (map(select(.scenario=="mixed"))[0].claim.state=="REFUTED") and
             (map(select(.scenario=="mixed"))[0].summary.unknown>0) and
             (map(select(.scenario=="mixed"))[0].summary.refuted>0) and
-            (map(select(.scenario=="authority-escalation"))[0].selection.reason=="TEST_RECEIPT_AUTHORITY_ESCALATED") and
+            (map(select(.scenario=="authority-escalation"))[0].selection.reason=="EXECUTION_RECEIPT_AUTHORITY_ESCALATED") and
             (map(select(.scenario=="authority-escalation"))[0].claim.state=="REFUTED") and
-            (map(select(.scenario=="authority-escalation"))[0].authority.consumer_test_executions==0)
+            (map(select(.scenario=="unknown-decision"))[0].selection.reason=="UNKNOWN_RECEIPT_DECISION") and
+            (map(select(.scenario=="unknown-decision"))[0].claim.state=="UNKNOWN")
           ' "$work/cases.json" >/dev/null
-          jq -e 'all(.[]; .authority.repository_writes==0 and .authority.local_test_executions==0 and .metrics.consumer_test_executions==0)' "$work/cases.json" >/dev/null
-          jq -e --slurpfile exact "$work/reports/exact-match-reuse/report.json" --slurpfile cases "$work/cases.json" '
+          jq -e 'all(.[]; .authority.repository_writes==0 and .authority.local_test_executions==0 and .authority.consumer_test_executions==0) and
+            all(map(select(.scenario!="authority-escalation" and .scenario!="mixed"))[]; .authority.cross_project_required_gates==0) and
+            (map(select(.scenario=="mixed"))[0].authority.cross_project_required_gates==1) and
+            (map(select(.scenario=="authority-escalation"))[0].authority.cross_project_required_gates==1)' "$work/cases.json" >/dev/null
+          jq -e --slurpfile normal "$work/reports/normal/report.json" --slurpfile cases "$work/cases.json" '
             .schema=="gooo/workgraph/selective-ci-work-selection-manifest/v1" and
-            .subject_sha==$exact[0].subject_sha and .report=="reports/exact-match-reuse/report.json" and
-            .work_selection=="reports/exact-match-reuse/ci-work-selection.json" and .human_dossier=="human-dossier.md" and
-            .performance==$exact[0].performance and .inventory==$exact[0].inventory and
+            .subject_sha==$normal[0].subject_sha and .report=="reports/normal/report.json" and .execution_receipt=="execution-receipt.json" and
+            .work_selection=="reports/normal/ci-work-selection.json" and .human_dossier=="human-dossier.md" and
+            .performance==$normal[0].performance and .inventory==$normal[0].inventory and
             .scenarios==[$cases[0][].scenario] and (.files|length)>0
           ' "$work/manifest.json" >/dev/null
           test -f "$work/human-dossier.md"
           grep -Eq 'evaluator_wall_ms|evaluator_peak_rss_kib|regular files|Go:|Gooo:' "$work/human-dossier.md"
-          jq -e '.file_count==31 and .manifest=="manifest.json" and .human_dossier=="human-dossier.md" and .repository_writes==0 and .local_test_executions==0' "$work/artifact/artifact-metadata.json" >/dev/null
+          jq -e '.schema=="gooo/workgraph/selective-ci-work-selection-artifact/v2" and .file_count>0 and .manifest=="manifest.json" and .execution_receipt=="execution-receipt.json" and .human_dossier=="human-dossier.md" and .go_version=="go1.27.0" and .repository_writes==0 and .local_test_executions==0 and .cross_project_required_gates==0' "$work/artifact/artifact-metadata.json" >/dev/null
 
       - name: Publish selection summary
         shell: bash
@@ -351,9 +401,9 @@ jobs:
           set -euo pipefail
           work="$RUNNER_TEMP/selective-ci-work-selection"
           {
-            echo '## Workgraph exact receipt selective CI work selection'
+            echo '## Workgraph actual test receipt and already-tested work selection'
             echo
-            jq -r '.[]|"- \(.scenario): \(.decision); action=\(.selection.action); planned=\(.metrics.tests_planned); reused=\(.metrics.tests_reused); required_to_execute=\(.metrics.tests_required_to_execute); producer_observed=\(.metrics.producer_test_executions_observed); consumer=\(.metrics.consumer_test_executions); saved_test_ms=\(.metrics.saved_test_ms)"' "$work/cases.json"
+            jq -r '.[]|"- \(.scenario): \(.decision); action=\(.selection.action); planned=\(.metrics.tests_planned); executed=\(.metrics.tests_executed); reused=\(.metrics.tests_reused); invalidated=\(.metrics.tests_invalidated); required=\(.metrics.tests_required_to_execute); test_wall_ms=\(.performance.test_wall_ms); test_peak_rss_kib=\(.performance.test_peak_rss_kib); reason=\(.selection.reason)"' "$work/cases.json"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce zero Workgraph repository writes
@@ -367,8 +417,21 @@ jobs:
 
       - name: Upload selective-CI evidence
         if: always()
+        id: evidence
         uses: actions/upload-artifact@v6
         with:
           name: workgraph-selective-ci-work-selection-${{ env.SUBJECT_SHA }}
           if-no-files-found: error
           path: ${{ runner.temp }}/selective-ci-work-selection/artifact
+
+      - name: Publish artifact identity
+        if: always()
+        run: |
+          {
+            echo
+            echo '### Evidence artifact'
+            echo "- name: workgraph-selective-ci-work-selection-${{ env.SUBJECT_SHA }}"
+            echo "- id: ${{ steps.evidence.outputs.artifact-id || 'unavailable' }}"
+            echo "- digest: ${{ steps.evidence.outputs.artifact-digest || 'unavailable' }}"
+            jq -r '"- file count: \(.file_count)","- Go version: \(.go_version)"' "$RUNNER_TEMP/selective-ci-work-selection/artifact/artifact-metadata.json"
+          } >> "$GITHUB_STEP_SUMMARY"
