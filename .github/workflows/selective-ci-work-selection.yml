@@ -181,7 +181,10 @@ jobs:
           jq '.authority.repository_writes=1' "$receipt" > "$reports/scenarios/authority-escalation.json"
 
           evaluate() {
-            local name=$1 input=$2 receipt_path=$3 report_scenario=${4:-$name}
+            local name=$1
+            local input=$2
+            local receipt_path=$3
+            local report_scenario=${4:-$1}
             bash scripts/selective-ci-work-selection-report.sh "$GITHUB_WORKSPACE" "$input" "$lock" "$receipt_path" "$result" \
               "$denominator" "$work/graph.json" "$work/resolution.json" "$work/runtime.json" "$reports/$name" "$SUBJECT_SHA" "$report_scenario"
           }
