@@ -280,6 +280,8 @@ elif test "$toolchain_digest_valid" = false && test "$input_ok" = true || test "
   selection_reason=TOOLCHAIN_DIGEST_MISMATCH
 elif test "$scenario_digest_match" = false && test "$execution_scope_present" = true; then
   selection_reason=SCENARIO_DIGEST_MISMATCH
+elif test "$execution_present" = false; then
+  selection_reason=ACTUAL_EXECUTION_RECEIPT_MISSING
 elif test "$execution_decision" = UNKNOWN || test "$execution_decision" = MISSING; then
   selection_reason=UNKNOWN_RECEIPT_DECISION
 elif test "$execution_present" = true && test "$actual_result_ok" = false; then

@@ -381,7 +381,7 @@ jobs:
             (map(select(.scenario=="unknown-decision"))[0].claim.state=="UNKNOWN")
           ' "$work/cases.json" >/dev/null
           jq -e 'all(.[]; .authority.repository_writes==0 and .authority.local_test_executions==0 and .authority.consumer_test_executions==0) and
-            all(map(select(.scenario!="authority-escalation" and .scenario!="mixed")); .authority.cross_project_required_gates==0) and
+            all(map(select(.scenario!="authority-escalation" and .scenario!="mixed"))[]; .authority.cross_project_required_gates==0) and
             (map(select(.scenario=="mixed"))[0].authority.cross_project_required_gates==1) and
             (map(select(.scenario=="authority-escalation"))[0].authority.cross_project_required_gates==1)' "$work/cases.json" >/dev/null
           jq -e --slurpfile normal "$work/reports/normal/report.json" --slurpfile cases "$work/cases.json" '
