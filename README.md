@@ -60,3 +60,17 @@ cells are declared by Gooo activities in
 `examples/workspace-inventory/main.gooo`. CI binds those activities through
 the released semantic graph before accepting any metric. Missing roots remain
 typed UNKNOWN, invalid roots are REFUTED, and observation writes remain zero.
+
+## Transformation effect adoption
+
+Workgraph independently consumes the released Gooo evidence-generator
+transformation-effect artifact. It verifies the annotated release identity,
+outer asset digests, all five inner manifests, byte-identical normal replay,
+the exact `11 CLOSED / 1 UNKNOWN -> 12 CLOSED / 0 UNKNOWN` fixture pair, and
+the producer's UNKNOWN and REFUTED cases. It does not trust the producer's
+top-level decision as its own authority.
+
+The adoption closes one independent public consumer path. It does not claim an
+external user outcome or language-wide generalization, and it never edits the
+producer, Workgraph, or an input project. See
+[the adoption RFC](docs/rfcs/transformation-effect-adoption-v1.md).
