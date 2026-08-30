@@ -1,0 +1,50 @@
+{
+  "schema": "gooo/workgraph/test-receipt-reuse-release-lock/v1",
+  "producer": {
+    "repository": "kimjooyoon/gooo-evidence-generator",
+    "tag": "v0.5.0-dev",
+    "ref_type": "tag",
+    "tag_object_sha": "e7407376dc494607bbf3c8ea23789c5dbe9e24ab",
+    "target_commit_sha": "12cd8e454c0884e05a73afd4265ec1d5ddfac102",
+    "release_id": 379247475,
+    "bundle": {
+      "id": 536462554,
+      "name": "gooo-evidence-generator-test-receipt-v0.5.0-dev.zip",
+      "size": 39536,
+      "digest": "sha256:26966da4c9e1327f4ddbeb299dccd85355a8d704fdf9f7586dd60f96b51b447c",
+      "expected_files": 44
+    },
+    "checksums": {
+      "id": 536462555,
+      "name": "SHA256SUMS",
+      "size": 118,
+      "digest": "sha256:27a7136670d66f400de298f54453c245d2e7f1a71befc214caf584d9c58fa301"
+    }
+  },
+  "gooo": {
+    "repository": "kimjooyoon/meta-ontology-go",
+    "tag": "v0.2.0-dev",
+    "tag_object_sha": "733f7b22a365606d42bf238f5c535ff12e5abf8c",
+    "target_commit_sha": "050b11e56d9f972e0d507d406e5da8a60595052b",
+    "release_id": 378268586,
+    "asset": {
+      "id": 533277598,
+      "name": "gooo-linux-amd64.tar.gz",
+      "size": 7021189,
+      "digest": "sha256:99599bdd3c2ae947718881dd78b899234452ab06bd8e60a550320054e1d81ddd"
+    },
+    "observed_binary_sha256": "bae2f246922ae753df9f5b0889e34ae32c965c4cbc446d93f1fc01d12f49420e"
+  },
+  "subject": {
+    "path": "examples/test-receipt-reuse/main.gooo",
+    "size": 2163,
+    "sha256": "9377220a30f1bf0b07d3a9bd6940af126339e4aa47f6358074fadc3a41424754",
+    "git_blob_sha": "12de86ed8d7769ea4284bd93b2baf6a154fd658c"
+  },
+  "baseline": {
+    "result_sha256": "b5027c6e7ad1a647fba7f0670317c32cc382842abbb9032bdca77163677f72ec",
+    "semantic_hash": "cf5c61aa34f3d3929bd27f9f27e5977f1533b22bc8b062c576faf878e0a75b73",
+    "decision": "PASS",
+    "diagnostics_schema": "gooo/diagnostics/v1"
+  }
+}

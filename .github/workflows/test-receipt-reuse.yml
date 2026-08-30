@@ -1,0 +1,343 @@
+name: Workgraph released test receipt reuse
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  consume:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SUBJECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PRODUCER_REPOSITORY: kimjooyoon/gooo-evidence-generator
+      PRODUCER_TAG: v0.5.0-dev
+      PRODUCER_TARGET: 12cd8e454c0884e05a73afd4265ec1d5ddfac102
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SUBJECT_SHA }}
+
+      - name: Bind Workgraph subject and capture read-only snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
+          work="$RUNNER_TEMP/test-receipt-reuse"
+          mkdir -p "$work"
+          find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -print0 |
+            sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}' > "$work/repository-before"
+
+      - name: Acquire and verify immutable release, checksum, corpus, and source blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/test-receipt-reuse"
+          lock=contracts/test-receipt-reuse-release-lock-v1.json
+          release_dir="$work/release"
+          corpus="$work/corpus"
+          mkdir -p "$release_dir" "$corpus"
+
+          producer_repository=$(jq -r .producer.repository "$lock")
+          producer_tag=$(jq -r .producer.tag "$lock")
+          producer_tag_object=$(jq -r .producer.tag_object_sha "$lock")
+          producer_target=$(jq -r .producer.target_commit_sha "$lock")
+          producer_release_id=$(jq -r .producer.release_id "$lock")
+          test "$producer_repository" = "$PRODUCER_REPOSITORY"
+          test "$producer_tag" = "$PRODUCER_TAG"
+          test "$producer_target" = "$PRODUCER_TARGET"
+
+          gh api "repos/$producer_repository/git/ref/tags/$producer_tag" > "$release_dir/producer-tag-ref.json"
+          jq -e --arg sha "$producer_tag_object" '.object.type=="tag" and .object.sha==$sha' \
+            "$release_dir/producer-tag-ref.json" >/dev/null
+          gh api "repos/$producer_repository/git/tags/$producer_tag_object" > "$release_dir/producer-tag-object.json"
+          jq -e --arg target "$producer_target" '.object.type=="commit" and .object.sha==$target' \
+            "$release_dir/producer-tag-object.json" >/dev/null
+          gh api "repos/$producer_repository/releases/$producer_release_id" > "$release_dir/producer-release.json"
+          jq -e --arg tag "$producer_tag" --argjson id "$producer_release_id" \
+            '.id==$id and .tag_name==$tag and .draft==false and .prerelease==true' \
+            "$release_dir/producer-release.json" >/dev/null
+
+          bundle_id=$(jq -r .producer.bundle.id "$lock")
+          bundle_name=$(jq -r .producer.bundle.name "$lock")
+          bundle_size=$(jq -r .producer.bundle.size "$lock")
+          bundle_digest=$(jq -r .producer.bundle.digest "$lock")
+          checksum_id=$(jq -r .producer.checksums.id "$lock")
+          checksum_name=$(jq -r .producer.checksums.name "$lock")
+          checksum_size=$(jq -r .producer.checksums.size "$lock")
+          checksum_digest=$(jq -r .producer.checksums.digest "$lock")
+          jq -e --arg name "$bundle_name" --arg digest "$bundle_digest" --argjson id "$bundle_id" --argjson size "$bundle_size" \
+            '[.assets[]|select(.name==$name and .id==$id and .size==$size and .digest==$digest)]|length==1' \
+            "$release_dir/producer-release.json" >/dev/null
+          jq -e --arg name "$checksum_name" --arg digest "$checksum_digest" --argjson id "$checksum_id" --argjson size "$checksum_size" \
+            '[.assets[]|select(.name==$name and .id==$id and .size==$size and .digest==$digest)]|length==1' \
+            "$release_dir/producer-release.json" >/dev/null
+          gh api -H 'Accept: application/octet-stream' "repos/$producer_repository/releases/assets/$bundle_id" > "$release_dir/$bundle_name"
+          gh api -H 'Accept: application/octet-stream' "repos/$producer_repository/releases/assets/$checksum_id" > "$release_dir/$checksum_name"
+          test "$(wc -c < "$release_dir/$bundle_name" | tr -d ' ')" -eq "$bundle_size"
+          test "$(wc -c < "$release_dir/$checksum_name" | tr -d ' ')" -eq "$checksum_size"
+          test "sha256:$(sha256sum "$release_dir/$bundle_name" | awk '{print $1}')" = "$bundle_digest"
+          test "sha256:$(sha256sum "$release_dir/$checksum_name" | awk '{print $1}')" = "$checksum_digest"
+          (cd "$release_dir" && sha256sum -c "$checksum_name")
+
+          test "$(unzip -Z1 "$release_dir/$bundle_name" | wc -l | tr -d ' ')" -eq 44
+          while IFS= read -r entry; do
+            case "$entry" in
+              /*|../*|*/../*|.. ) echo "unsafe archive path: $entry" >&2; exit 1 ;;
+            esac
+          done < <(unzip -Z1 "$release_dir/$bundle_name")
+          unzip -q "$release_dir/$bundle_name" -d "$corpus"
+          test "$(find "$corpus" -type f | wc -l | tr -d ' ')" -eq 44
+
+          gooo_repository=$(jq -r .gooo.repository "$lock")
+          gooo_tag=$(jq -r .gooo.tag "$lock")
+          gooo_tag_object=$(jq -r .gooo.tag_object_sha "$lock")
+          gooo_target=$(jq -r .gooo.target_commit_sha "$lock")
+          gooo_release_id=$(jq -r .gooo.release_id "$lock")
+          gh api "repos/$gooo_repository/git/ref/tags/$gooo_tag" > "$release_dir/gooo-tag-ref.json"
+          jq -e --arg sha "$gooo_tag_object" '.object.type=="tag" and .object.sha==$sha' \
+            "$release_dir/gooo-tag-ref.json" >/dev/null
+          gh api "repos/$gooo_repository/git/tags/$gooo_tag_object" > "$release_dir/gooo-tag-object.json"
+          jq -e --arg target "$gooo_target" '.object.type=="commit" and .object.sha==$target' \
+            "$release_dir/gooo-tag-object.json" >/dev/null
+          gh api "repos/$gooo_repository/releases/$gooo_release_id" > "$release_dir/gooo-release.json"
+          gooo_asset_id=$(jq -r .gooo.asset.id "$lock")
+          gooo_asset_name=$(jq -r .gooo.asset.name "$lock")
+          gooo_asset_size=$(jq -r .gooo.asset.size "$lock")
+          gooo_asset_digest=$(jq -r .gooo.asset.digest "$lock")
+          jq -e --arg tag "$gooo_tag" --argjson id "$gooo_release_id" \
+            '.id==$id and .tag_name==$tag and .draft==false' "$release_dir/gooo-release.json" >/dev/null
+          jq -e --arg name "$gooo_asset_name" --arg digest "$gooo_asset_digest" --argjson id "$gooo_asset_id" --argjson size "$gooo_asset_size" \
+            '[.assets[]|select(.name==$name and .id==$id and .size==$size and .digest==$digest)]|length==1' \
+            "$release_dir/gooo-release.json" >/dev/null
+
+          source_path=$(jq -r .subject.path "$lock")
+          test "$source_path" = "examples/test-receipt-reuse/main.gooo"
+          gh api "repos/$producer_repository/contents/$source_path?ref=$producer_target" > "$release_dir/source-contents-response.json"
+          jq -e --arg path "$source_path" --arg sha "$(jq -r .subject.git_blob_sha "$lock")" --argjson size "$(jq -r .subject.size "$lock")" \
+            '.path==$path and .sha==$sha and .size==$size and .encoding=="base64"' \
+            "$release_dir/source-contents-response.json" >/dev/null
+          jq -r .content "$release_dir/source-contents-response.json" | tr -d '\n' | base64 -d > "$release_dir/source.gooo"
+          test "$(wc -c < "$release_dir/source.gooo" | tr -d ' ')" -eq "$(jq -r .subject.size "$lock")"
+          source_blob_sha=$(sha256sum "$release_dir/source.gooo" | awk '{print $1}')
+          test "$source_blob_sha" = "$(jq -r .subject.sha256 "$lock")"
+          test "$(sha256sum examples/test-receipt-reuse/main.gooo | awk '{print $1}')" = "$source_blob_sha"
+
+          jq -S -n \
+            --arg producer_repository "$producer_repository" --arg producer_tag "$producer_tag" --arg producer_target "$producer_target" \
+            --arg producer_tag_object "$producer_tag_object" --argjson producer_release_id "$producer_release_id" \
+            --arg bundle_name "$bundle_name" --arg bundle_digest "$bundle_digest" --argjson bundle_id "$bundle_id" --argjson bundle_size "$bundle_size" \
+            --arg checksum_name "$checksum_name" --arg checksum_digest "$checksum_digest" --argjson checksum_id "$checksum_id" --argjson checksum_size "$checksum_size" \
+            --arg gooo_repository "$gooo_repository" --arg gooo_tag "$gooo_tag" --arg gooo_target "$gooo_target" \
+            --arg gooo_tag_object "$gooo_tag_object" --argjson gooo_release_id "$gooo_release_id" \
+            --arg gooo_asset_name "$gooo_asset_name" --arg gooo_asset_digest "$gooo_asset_digest" --argjson gooo_asset_id "$gooo_asset_id" --argjson gooo_asset_size "$gooo_asset_size" \
+            --arg source_path "$source_path" --arg source_sha "$source_blob_sha" --arg source_git_sha "$(jq -r .subject.git_blob_sha "$lock")" --argjson source_size "$(jq -r .subject.size "$lock")" \
+            --arg subject_sha "$SUBJECT_SHA" \
+            '{schema:"gooo/workgraph/test-receipt-reuse-acquisition/v1",subject_sha:$subject_sha,
+              release:{present:true,verified:true,repository:$producer_repository,tag:$producer_tag,tag_object_sha:$producer_tag_object,target_commit_sha:$producer_target,release_id:$producer_release_id,
+                bundle:{id:$bundle_id,name:$bundle_name,size:$bundle_size,digest:$bundle_digest},checksums:{id:$checksum_id,name:$checksum_name,size:$checksum_size,digest:$checksum_digest}},
+              gooo:{verified:true,repository:$gooo_repository,tag:$gooo_tag,tag_object_sha:$gooo_tag_object,target_commit_sha:$gooo_target,release_id:$gooo_release_id,
+                asset:{id:$gooo_asset_id,name:$gooo_asset_name,size:$gooo_asset_size,digest:$gooo_asset_digest}},
+              source_blob:{verified:true,api_reads:1,path:$source_path,size:$source_size,sha256:$source_sha,git_blob_sha:$source_git_sha},
+              baseline:{result_verified:true},corpus:{verified:true,files:44,manifest_entries:21}}' > "$work/acquisition.json"
+          jq -e '.release.verified and .gooo.verified and .source_blob.verified and .source_blob.api_reads==1 and .corpus.files==44' "$work/acquisition.json" >/dev/null
+
+      - name: Independently evaluate the released receipt without test execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/test-receipt-reuse"
+          corpus="$work/corpus"
+          reports="$work/reports"
+          mkdir -p "$reports"
+
+          jq -S -n --arg subject "$SUBJECT_SHA" '
+            {schema:"gooo/workgraph/test-receipt-reuse-runtime/v1",subject_sha:$subject,
+             toolchain:{go_required:"go1.27.0"},
+             executions:{producer_test:1,consumer_test:0,producer_conformance_receipts_reused:7,local_test:0,go_build:0,go_test:0,product_build:0,product_test:0,api_immutable_source_reads:1,evaluator_runs:11},
+             performance:{evaluator_wall_ms:0,evaluator_peak_rss_kib:0},
+             authority:{producer_source_checkout:0,sibling_checkout_reads:0,repository_writes:0,local_test_executions:0,go_build_executions:0,go_test_executions:0,product_test_executions:0,producer_test_executions_observed:1,consumer_producer_scope_test_executions:0,automatic_source_promotion:"FORBIDDEN",root_readme_readiness:"EXCLUDED"},
+             improvement:{receipt_reuse_without_consumer_execution:{state:"CLOSED",observed:1,required:1},
+               saved_test_ms:{state:"UNKNOWN",observed:0,required:1,before:4,after:null,stage:"UTILITY",step:"COMPARE_EQUIVALENT_TEST_TIMING",reason:"EQUIVALENT_INDEPENDENT_TIMING_PAIR_ABSENT",unknown_class:"DIRECT_MISSING",next_operation:"OBSERVE_EQUIVALENT_CONSUMER_TIMING",blocked_by:[]},
+               external_user_utility:{state:"UNKNOWN",observed:0,required:1,stage:"UTILITY",step:"OBSERVE_EXTERNAL_USER_TEST_REUSE",reason:"EXTERNAL_USER_EVIDENCE_ABSENT",unknown_class:"DIRECT_MISSING",next_operation:"OBSERVE_ONE_EXTERNAL_USER_SESSION",blocked_by:[]},
+               language_wide_generalization:{state:"UNKNOWN",observed:0,required:1,stage:"GENERALIZATION",step:"OBSERVE_INDEPENDENT_RELEASE_CONSUMER",reason:"SECOND_INDEPENDENT_DOMAIN_EVIDENCE_ABSENT",unknown_class:"DIRECT_MISSING",next_operation:"OBSERVE_SECOND_INDEPENDENT_DOMAIN_CONSUMER",blocked_by:[]}}}
+          ' > "$work/runtime.json"
+
+          start_ns=$(date +%s%N)
+          /usr/bin/time -v -o "$work/evaluator-time.txt" bash scripts/test-receipt-reuse-report.sh \
+            "$GITHUB_WORKSPACE" "$corpus" "$work/acquisition.json" "$corpus/graph.json" \
+            contracts/test-receipt-reuse-denominator-v1.json "$work/runtime.json" "$reports/normal-measured.receipt" "$PRODUCER_TARGET" normal
+          end_ns=$(date +%s%N)
+          wall_ms=$(( (end_ns-start_ns)/1000000 ))
+          peak_rss_kib=$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "$work/evaluator-time.txt")
+          test -n "$peak_rss_kib"
+          jq --argjson wall_ms "$wall_ms" --argjson peak_rss_kib "$peak_rss_kib" \
+            '.performance={evaluator_wall_ms:$wall_ms,evaluator_peak_rss_kib:$peak_rss_kib}' \
+            "$work/runtime.json" > "$work/runtime-measured.json"
+          mv "$work/runtime-measured.json" "$work/runtime.json"
+
+          jq '.release.present=false | .release.verified=false' "$work/acquisition.json" > "$work/acquisition-missing-release.json"
+          jq '.source_blob.verified=false' "$work/acquisition.json" > "$work/acquisition-stale-blob.json"
+          jq '.baseline.result_verified=false' "$work/acquisition.json" > "$work/acquisition-result-contradiction.json"
+
+          evaluate() {
+            local case_name=$1 case_acquisition=$2
+            bash scripts/test-receipt-reuse-report.sh "$GITHUB_WORKSPACE" "$corpus" "$case_acquisition" "$corpus/graph.json" \
+              contracts/test-receipt-reuse-denominator-v1.json "$work/runtime.json" "$reports/$case_name.json" "$PRODUCER_TARGET" "$case_name"
+          }
+          evaluate normal "$work/acquisition.json"
+          evaluate missing-release "$work/acquisition-missing-release.json"
+          evaluate missing-receipt "$work/acquisition.json"
+          evaluate stale-scope "$work/acquisition.json"
+          evaluate stale-blob "$work/acquisition-stale-blob.json"
+          evaluate result-contradiction "$work/acquisition-result-contradiction.json"
+          evaluate refuted-over-unknown "$work/acquisition.json"
+          evaluate authority-escalation "$work/acquisition.json"
+          evaluate unrecognized-fixed-point "$work/acquisition.json"
+          cp "$reports/normal.json" "$reports/normal-replay.json"
+          cmp -s "$reports/normal.json" "$reports/normal-replay.json"
+          jq -s -S '.' "$reports/normal.json" "$reports/missing-release.json" "$reports/missing-receipt.json" \
+            "$reports/stale-scope.json" "$reports/stale-blob.json" "$reports/result-contradiction.json" \
+            "$reports/refuted-over-unknown.json" "$reports/authority-escalation.json" "$reports/unrecognized-fixed-point.json" > "$work/cases.json"
+
+      - name: Stage raw reports before assertions
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/test-receipt-reuse"
+          artifact="$work/artifact"
+          mkdir -p "$artifact"
+          if test -d "$work/corpus" && test ! -d "$artifact/release-corpus"; then cp -R "$work/corpus" "$artifact/release-corpus"; fi
+          if test -d "$work/reports"; then
+            mkdir -p "$artifact/reports"
+            for file in "$work"/reports/*; do test -f "$file" && cp "$file" "$artifact/reports/"; done
+          fi
+          for file in "$work"/acquisition*.json "$work"/runtime.json "$work"/cases.json; do
+            test -f "$file" && cp "$file" "$artifact/"
+          done
+          if test -d "$work/release" && test ! -d "$artifact/release-metadata"; then cp -R "$work/release" "$artifact/release-metadata"; fi
+
+      - name: Assert case denominators, precedence, and human indicators
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/test-receipt-reuse"
+          reports="$work/reports"
+          echo 'Observed case reports:'
+          if test -f "$work/cases.json"; then
+            jq -r '.[]|[.scenario,.summary.closed,.summary.unknown,.summary.refuted,.claim.state,.claim.reason,.claim.unknown_class]|@tsv' "$work/cases.json"
+          else
+            echo 'cases.json missing'
+          fi
+          echo 'Observed normal reuse signals:'
+          if test -f "$reports/normal.json"; then
+            jq -r '[.adoption.independent_released_receipt_consumers,.adoption.released_receipt_reuses,.execution.producer_test,.execution.consumer_test,.source.immutable_api_reads]|@tsv' "$reports/normal.json"
+          else
+            echo 'normal.json missing'
+          fi
+          jq -e '
+            length==9 and
+            all(.[]; .summary.total==12 and (.summary.closed+.summary.unknown+.summary.refuted)==12 and
+              ([.proofs[]|select(.total==4)]|length)==3 and
+              ([.indicator_classes[]|select(.total==4)]|length)==3 and
+              all(.cells[]; has("stage") and has("step") and has("reason") and has("unknown_class") and has("next_operation") and has("blocked_by")) and
+              all(.cells[]; if .state=="UNKNOWN" then .stage!=null and .step!=null and .reason!=null and .unknown_class!=null and .next_operation!=null and .blocked_by!=null else true end)) and
+            (map(select(.scenario=="normal"))[0].summary=={closed:12,direct_missing:0,dependency_blocked:0,refuted:0,total:12,unknown:0}) and
+            (map(select(.scenario=="normal"))[0].proofs|all(.[];.closed==4 and .total==4)) and
+            (map(select(.scenario=="normal"))[0].indicator_classes|all(.[];.closed==4 and .total==4)) and
+            (map(select(.scenario=="missing-release"))[0].summary=={closed:0,direct_missing:1,dependency_blocked:11,refuted:0,total:12,unknown:12}) and
+            (map(select(.scenario=="missing-receipt"))[0].summary=={closed:5,direct_missing:1,dependency_blocked:6,refuted:0,total:12,unknown:7}) and
+            (map(select(.scenario=="stale-scope"))[0].summary=={closed:8,direct_missing:0,dependency_blocked:0,refuted:4,total:12,unknown:0}) and
+            (map(select(.scenario=="stale-blob"))[0].claim.state=="REFUTED") and
+            (map(select(.scenario=="result-contradiction"))[0].claim.state=="REFUTED") and
+            (map(select(.scenario=="refuted-over-unknown"))[0].summary=={closed:7,direct_missing:1,dependency_blocked:0,refuted:4,total:12,unknown:1}) and
+            (map(select(.scenario=="refuted-over-unknown"))[0].claim.state=="REFUTED") and
+            (map(select(.scenario=="authority-escalation"))[0].summary=={closed:10,direct_missing:0,dependency_blocked:0,refuted:2,total:12,unknown:0}) and
+            (map(select(.scenario=="unrecognized-fixed-point"))[0].summary=={closed:7,direct_missing:0,dependency_blocked:0,refuted:5,total:12,unknown:0}) and
+            (map(select(.scenario=="unrecognized-fixed-point"))[0].claim.reason=="UNRECOGNIZED_TEST_RECEIPT_DECISION_OR_RESULT_CONTRADICTION")
+          ' "$work/cases.json" >/dev/null
+          jq -e '
+            .scenario=="normal" and .decision=="WORKGRAPH_TEST_RECEIPT_REUSE_ADOPTED" and
+            .adoption.independent_released_receipt_consumers==1 and .adoption.independent_released_receipt_consumer_total==1 and
+            .adoption.released_receipt_reuses==1 and .adoption.released_receipt_reuse_total==1 and
+            .adoption.consumer_producer_scope_test_executions==0 and .source.immutable_api_reads==1 and
+            .artifact.corpus_files==44 and .artifact.manifest_entries_verified==21 and
+            .checks.source_local_sha256 and .checks.graph_and_released_checks and .checks.baseline_receipt and .checks.baseline_result and
+            .authority.repository_writes==0 and .authority.producer_source_checkout==0 and .authority.sibling_checkout_reads==0 and
+            .utility.saved_test_ms.state=="UNKNOWN" and .utility.external_utility.state=="UNKNOWN"
+          ' "$reports/normal.json" >/dev/null
+          jq -e '.execution.consumer_test==0 and .execution.producer_test==1 and .performance.evaluator_wall_ms>0 and .performance.evaluator_peak_rss_kib>0' "$reports/normal.json" >/dev/null
+
+      - name: Publish evidence summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/test-receipt-reuse"
+          {
+            echo '## Workgraph released test receipt reuse'
+            echo
+            jq -r '"- normal decision: \(.decision)","- normal cells: \(.summary.closed)/\(.summary.total) CLOSED; UNKNOWN \(.summary.unknown); REFUTED \(.summary.refuted)","- independent released receipt consumers: \(.adoption.independent_released_receipt_consumers)/\(.adoption.independent_released_receipt_consumer_total)","- released receipt reuses: \(.adoption.released_receipt_reuses)/\(.adoption.released_receipt_reuse_total)","- producer test executions observed: \(.execution.producer_test)","- consumer producer-scope test executions: \(.execution.consumer_test)","- immutable source blob API reads: \(.source.immutable_api_reads)","- release corpus: \(.artifact.corpus_files)/\(.artifact.corpus_file_total) files; manifests \(.artifact.manifest_entries_verified)/\(.artifact.manifest_entry_total)","- evaluator: \(.performance.evaluator_wall_ms) ms / \(.performance.evaluator_peak_rss_kib) KiB peak RSS","- inventory: \(.inventory.repository_files) files / \(.inventory.descendant_directories) descendant directories / \(.inventory.physical_lines) physical lines","- Go: \(.inventory.go.files) files / \(.inventory.go.lines) lines; Gooo: \(.inventory.gooo.files) files / \(.inventory.gooo.lines) lines","- root README readiness: \(.inventory.root_readme_policy)","- saved_test_ms: \(.utility.saved_test_ms.state); external utility: \(.utility.external_utility.state)"' "$work/reports/normal.json"
+            echo
+            echo '### Case cells'
+            jq -r '.[]|"- \(.scenario): \(.summary.closed) CLOSED / \(.summary.unknown) UNKNOWN / \(.summary.refuted) REFUTED"' "$work/cases.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce zero Workgraph repository writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/test-receipt-reuse"
+          find "$GITHUB_WORKSPACE" -path "$GITHUB_WORKSPACE/.git" -prune -o -type f -print0 |
+            sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}' > "$work/repository-after"
+          test "$(cat "$work/repository-before")" = "$(cat "$work/repository-after")"
+
+      - name: Prepare exact evidence artifact
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/test-receipt-reuse"
+          artifact="$work/artifact"
+          mkdir -p "$artifact"
+          if test -d "$work/corpus" && test ! -d "$artifact/release-corpus"; then cp -R "$work/corpus" "$artifact/release-corpus"; fi
+          if test -d "$work/reports"; then
+            mkdir -p "$artifact/reports"
+            for file in "$work"/reports/*; do test -f "$file" && cp "$file" "$artifact/reports/"; done
+          fi
+          for file in "$work"/acquisition*.json "$work"/runtime.json "$work"/cases.json; do
+            test -f "$file" && cp "$file" "$artifact/"
+          done
+          if test -d "$work/release" && test ! -d "$artifact/release-metadata"; then cp -R "$work/release" "$artifact/release-metadata"; fi
+          find "$artifact" -type f | sort > "$work/artifact-files.txt"
+          artifact_files=$(($(wc -l < "$work/artifact-files.txt" | tr -d ' ')+1))
+          printf '%s\n' "$artifact_files" > "$work/artifact-file-count"
+          jq -S -n --arg subject "$SUBJECT_SHA" --argjson files "$(cat "$work/artifact-file-count")" \
+            '{schema:"gooo/workgraph/test-receipt-reuse-artifact/v1",subject_sha:$subject,files:$files,release_corpus_files:44}' > "$artifact/artifact-metadata.json"
+          find "$artifact" -type f | sort > "$work/artifact-files-with-metadata.txt"
+
+      - name: Upload exact receipt reuse evidence
+        if: always()
+        id: evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: workgraph-test-receipt-reuse-${{ env.SUBJECT_SHA }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/test-receipt-reuse/artifact
+
+      - name: Publish artifact identity
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo
+            echo '### Actions artifact'
+            echo '- artifact id: ${{ steps.evidence.outputs.artifact-id }}'
+            echo '- artifact digest: ${{ steps.evidence.outputs.artifact-digest }}'
+            echo "- artifact files: $(cat "$RUNNER_TEMP/test-receipt-reuse/artifact-file-count" 2>/dev/null || echo UNKNOWN)"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,30 @@
+{
+  "schema": "gooo/workgraph/test-receipt-reuse-denominator/v1",
+  "denominator_id": "gooo.denominator.workgraph.test-receipt-reuse.v1",
+  "version": 1,
+  "target_cells": 12,
+  "cells": [
+    {"id":"RELEASED_GOOO_IDENTITY","activity":"ObserveReleasedTestCore","stage":"RELEASE","step":"OBSERVE_RELEASED_TEST_CORE","proof_choice":"FOUNDATION","indicator_class":"DRIVER","depends_on":[],"closed_reason":"RELEASED_TEST_CORE_OBSERVED","unknown_reason":"RELEASE_NOT_AVAILABLE","refuted_reason":"RELEASE_IDENTITY_MISMATCH","next_operation":"OBSERVE_RELEASED_TEST_CORE"},
+    {"id":"META_ACTIVITY_AUTHORITY","activity":"BindTestReceiptReuseActivities","stage":"META","step":"BIND_TEST_RECEIPT_REUSE_ACTIVITIES","proof_choice":"FOUNDATION","indicator_class":"GUARDRAIL","depends_on":["RELEASED_GOOO_IDENTITY"],"closed_reason":"TEST_RECEIPT_REUSE_ACTIVITIES_BOUND","unknown_reason":"META_ACTIVITY_BINDING_NOT_OBSERVED","refuted_reason":"META_ACTIVITY_BINDING_MISMATCH","next_operation":"BIND_TEST_RECEIPT_REUSE_ACTIVITIES"},
+    {"id":"SUBJECT_SCOPE","activity":"PinTestSubjectScope","stage":"SOURCE","step":"PIN_TEST_SUBJECT_SCOPE","proof_choice":"FOUNDATION","indicator_class":"DRIVER","depends_on":["RELEASED_GOOO_IDENTITY","META_ACTIVITY_AUTHORITY"],"closed_reason":"TEST_SUBJECT_SCOPE_PINNED","unknown_reason":"TEST_SUBJECT_SCOPE_NOT_OBSERVED","refuted_reason":"TEST_SUBJECT_SCOPE_MISMATCH","next_operation":"PIN_TEST_SUBJECT_SCOPE"},
+    {"id":"BASELINE_TEST_EXECUTION","activity":"RecordBaselineTestExecution","stage":"EXECUTION","step":"RECORD_BASELINE_TEST_EXECUTION","proof_choice":"FOUNDATION","indicator_class":"OUTCOME","depends_on":["SUBJECT_SCOPE"],"closed_reason":"BASELINE_TEST_EXECUTION_RECORDED","unknown_reason":"TEST_RECEIPT_NOT_OBSERVED","refuted_reason":"BASELINE_TEST_EXECUTION_MISMATCH","next_operation":"RECORD_BASELINE_TEST_EXECUTION"},
+    {"id":"TEST_RECEIPT","activity":"PublishExactTestReceipt","stage":"RECEIPT","step":"PUBLISH_EXACT_TEST_RECEIPT","proof_choice":"COHERENCE","indicator_class":"DRIVER","depends_on":["BASELINE_TEST_EXECUTION"],"closed_reason":"EXACT_TEST_RECEIPT_PUBLISHED","unknown_reason":"TEST_RECEIPT_NOT_OBSERVED","refuted_reason":"TEST_RECEIPT_PUBLISH_MISMATCH","next_operation":"PUBLISH_EXACT_TEST_RECEIPT"},
+    {"id":"RECEIPT_IDENTITY","activity":"VerifyTestReceiptIdentity","stage":"IDENTITY","step":"VERIFY_TEST_RECEIPT_IDENTITY","proof_choice":"COHERENCE","indicator_class":"DRIVER","depends_on":["TEST_RECEIPT"],"closed_reason":"TEST_RECEIPT_IDENTITY_VERIFIED","unknown_reason":"TEST_RECEIPT_RESULT_EVIDENCE_MISSING","refuted_reason":"UNRECOGNIZED_TEST_RECEIPT_DECISION_OR_RESULT_CONTRADICTION","next_operation":"VERIFY_TEST_RECEIPT_IDENTITY"},
+    {"id":"SCOPE_EQUIVALENCE","activity":"CompareTestScopeDigests","stage":"EQUIVALENCE","step":"COMPARE_TEST_SCOPE_DIGESTS","proof_choice":"COHERENCE","indicator_class":"OUTCOME","depends_on":["SUBJECT_SCOPE","RECEIPT_IDENTITY"],"closed_reason":"TEST_SCOPE_DIGESTS_EQUIVALENT","unknown_reason":"TEST_SCOPE_EQUIVALENCE_NOT_OBSERVED","refuted_reason":"TEST_RECEIPT_SCOPE_OR_BLOB_MISMATCH","next_operation":"COMPARE_TEST_SCOPE_DIGESTS"},
+    {"id":"REUSE_DECISION","activity":"AuthorizeExactTestReceiptReuse","stage":"AUTHORIZATION","step":"AUTHORIZE_EXACT_TEST_RECEIPT_REUSE","proof_choice":"COHERENCE","indicator_class":"OUTCOME","depends_on":["SCOPE_EQUIVALENCE"],"closed_reason":"EXACT_TEST_RECEIPT_REUSE_AUTHORIZED","unknown_reason":"TEST_RECEIPT_REUSE_NOT_AUTHORIZED","refuted_reason":"DEPENDENCY_REFUTED","next_operation":"AUTHORIZE_EXACT_TEST_RECEIPT_REUSE"},
+    {"id":"EXECUTION_AVOIDANCE","activity":"RecordReceiptReuseWithoutConsumerTest","stage":"AUTHORITY","step":"RECORD_RECEIPT_REUSE_WITHOUT_CONSUMER_TEST","proof_choice":"REGRESSION","indicator_class":"GUARDRAIL","depends_on":["REUSE_DECISION"],"closed_reason":"RECEIPT_REUSED_WITHOUT_CONSUMER_TEST","unknown_reason":"RECEIPT_REUSE_NOT_OBSERVED","refuted_reason":"TEST_RECEIPT_AUTHORITY_ESCALATED","next_operation":"RECORD_RECEIPT_REUSE_WITHOUT_CONSUMER_TEST"},
+    {"id":"UNKNOWN_CAUSALITY","activity":"PreserveTestReceiptUnknown","stage":"UNCERTAINTY","step":"PRESERVE_TEST_RECEIPT_UNKNOWN","proof_choice":"REGRESSION","indicator_class":"GUARDRAIL","depends_on":["META_ACTIVITY_AUTHORITY"],"closed_reason":"TEST_RECEIPT_UNKNOWN_CAUSALITY_PRESERVED","unknown_reason":"UNKNOWN_CAUSALITY_NOT_PRESERVED","refuted_reason":"UNKNOWN_CAUSALITY_MISMATCH","next_operation":"PRESERVE_TEST_RECEIPT_UNKNOWN"},
+    {"id":"REFUTATION_PRECEDENCE","activity":"RefuteStaleOrContradictoryReceipt","stage":"REFUTATION","step":"REFUTE_STALE_OR_CONTRADICTORY_RECEIPT","proof_choice":"REGRESSION","indicator_class":"GUARDRAIL","depends_on":["META_ACTIVITY_AUTHORITY"],"closed_reason":"TEST_RECEIPT_REFUTATION_PRECEDENCE_PRESERVED","unknown_reason":"REFUTATION_PRECEDENCE_NOT_OBSERVED","refuted_reason":"REFUTATION_PRECEDENCE_MISMATCH","next_operation":"REFUTE_STALE_OR_CONTRADICTORY_RECEIPT"},
+    {"id":"HUMAN_REPORT","activity":"PublishTestReceiptReuseReport","stage":"REPORT","step":"PUBLISH_TEST_RECEIPT_REUSE_REPORT","proof_choice":"REGRESSION","indicator_class":"OUTCOME","depends_on":["REUSE_DECISION","EXECUTION_AVOIDANCE","UNKNOWN_CAUSALITY","REFUTATION_PRECEDENCE"],"closed_reason":"TEST_RECEIPT_REUSE_REPORT_PUBLISHED","unknown_reason":"TEST_RECEIPT_REUSE_REPORT_NOT_OBSERVED","refuted_reason":"REUSE_REPORT_CONTRADICTED","next_operation":"PUBLISH_TEST_RECEIPT_REUSE_REPORT"}
+  ],
+  "proof_totals": [
+    {"proof_choice":"FOUNDATION","closed":4,"total":4},
+    {"proof_choice":"COHERENCE","closed":4,"total":4},
+    {"proof_choice":"REGRESSION","closed":4,"total":4}
+  ],
+  "indicator_totals": [
+    {"indicator_class":"DRIVER","closed":4,"total":4},
+    {"indicator_class":"OUTCOME","closed":4,"total":4},
+    {"indicator_class":"GUARDRAIL","closed":4,"total":4}
+  ]
+}
