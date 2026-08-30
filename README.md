@@ -99,30 +99,33 @@ released receipt consumer.
 
 See [the test receipt reuse RFC](docs/rfcs/test-receipt-reuse-v1.md).
 
-## Exact receipt selective CI work selection
+## Actual receipt and already-tested selective CI
 
-The selective-CI workflow connects one released exact test receipt to an
-actual work-selection plan. It selects `REUSE` only when the current input,
-released toolchain, exact command, scope, result digest, and trusted semantic
-hash all match. Any changed input/toolchain/command/scope selects
-`RERUN_REQUIRED`; a missing receipt remains UNKNOWN evidence and takes the same
-safe rerun action.
+The selective-CI workflow binds a real released-Gooo fixture execution to an
+explicit already-tested boundary. `REUSE` is CLOSED only when immutable input,
+toolchain, and scenario digests all match the actual execution receipt, the
+prior released receipt and result are independently verified, and authority is
+clean. Missing, stale, changed, unknown, contradictory, or digest-laundered
+evidence selects `RERUN_REQUIRED` and remains UNKNOWN or REFUTED; REFUTED takes
+priority over UNKNOWN.
 
-This is a separate consumer from the full receipt-corpus adoption above. Its
-contract has a fixed 12-cell denominator and exactly 12 released-Gooo-bound
-meta activities. The report keeps `tests_planned`, `tests_reused`,
-`tests_required_to_execute`, `producer_test_executions_observed`,
-`consumer_test_executions`, and `saved_test_ms` as integer-or-UNKNOWN values.
-`saved_test_ms` remains UNKNOWN without an exact before/after timing pair.
+The fixed 12-cell denominator is bound one-for-one to Gooo activities for
+`PlannedTest`, `ExecutedTest`, `ReusedPriorReceipt`, `InvalidatedReceipt`,
+`RequiredWork`, and `UnknownCausalFrontier`, plus the digest, IR, authority,
+and report links. CI exercises normal, missing-receipt, stale,
+changed-input, digest-laundering, mixed, authority-escalation, and
+unknown-decision fixtures without lowering the denominator.
 
-CI covers exact-match reuse, changed-input rerun, missing-receipt UNKNOWN,
-digest-valid semantic laundering REFUTED, mixed REFUTED-over-UNKNOWN, and
-authority escalation REFUTED. The evaluator writes only to caller-owned temp
-output and asserts zero repository writes and zero local or consumer test
-executions. See [the selective-CI RFC](docs/rfcs/selective-ci-work-selection-v1.md).
+Reports expose `tests_planned`, `tests_executed`, `tests_reused`,
+`tests_invalidated`, and `tests_required_to_execute`, together with fixture
+`test_wall_ms` and `test_peak_rss_kib`. `saved_test_ms` remains UNKNOWN without
+an exact before/after timing pair. The report also records
+`repository_writes=0`, `local_test_executions=0`, and
+`cross_project_required_gates=0` for the clean path, and retains the six-field
+UNKNOWN causal frontier.
 
-The same report is linked to a deterministic manifest and human dossier. CI
-records evaluator `wall_ms` and `peak_rss_kib`, plus root-README-excluded
-regular-file, descendant-directory, physical-line, Go, and Gooo inventory.
-These are observations only; they are not quality scores or improvement
-claims.
+The report is linked to a deterministic manifest and human dossier. CI
+publishes root-README-excluded regular-file, descendant-directory,
+physical-line, Go, and Gooo inventory, artifact file count, and Go 1.27 in
+both human-readable and artifact evidence. See
+[the selective-CI RFC](docs/rfcs/selective-ci-work-selection-v1.md).
